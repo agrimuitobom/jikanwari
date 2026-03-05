@@ -17,6 +17,8 @@ import { SubjectList } from './components/subject/SubjectList'
 import { AssignmentForm } from './components/assignment/AssignmentForm'
 import { AssignmentList } from './components/assignment/AssignmentList'
 
+import { ScheduleViewContainer } from './components/schedule/ScheduleViewContainer'
+
 // ============================================================
 // タブ定義
 // ============================================================
@@ -251,29 +253,20 @@ function AssignmentSection() {
 }
 
 // ============================================================
-// 時間割プレースホルダー
+// 時間割セクション
 // ============================================================
 
 function ScheduleSection() {
+  const { teachers } = useTeachers()
+  const { subjects } = useSubjects()
+  const { assignments } = useAssignments()
+
   return (
-    <div className="card flex flex-col items-center gap-3 py-24 text-gray-400">
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 24 24"
-        strokeWidth={1.5}
-        stroke="currentColor"
-        className="h-16 w-16 text-gray-200"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125h7.5c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125h-7.5zm8.625 1.125c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v6.75c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-6.75z"
-        />
-      </svg>
-      <p className="text-base font-medium">時間割ビュー</p>
-      <p className="text-sm">教員・科目・授業割当を登録後、自動生成機能が利用可能になります</p>
-    </div>
+    <ScheduleViewContainer
+      teachers={teachers}
+      subjects={subjects}
+      assignments={assignments}
+    />
   )
 }
 
