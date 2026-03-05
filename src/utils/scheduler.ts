@@ -82,10 +82,6 @@ interface BoardState {
 // ユーティリティ
 // ============================================================
 
-function slotKey(day: DayOfWeek, period: Period): string {
-  return `${day}:${period}`
-}
-
 function cellKey(day: DayOfWeek, period: Period, id: string): string {
   return `${day}:${period}:${id}`
 }
