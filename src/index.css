@@ -16,9 +16,14 @@
   }
 
   .form-select {
-    @apply form-input appearance-none bg-white pr-8
-           bg-[url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E")]
-           bg-[length:1.25rem] bg-[right_0.5rem_center] bg-no-repeat;
+    @apply w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm
+           placeholder:text-gray-400
+           focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500
+           disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400
+           appearance-none bg-white pr-8 bg-no-repeat;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+    background-size: 1.25rem;
+    background-position: right 0.5rem center;
   }
 
   /* ---- ボタン ---- */
