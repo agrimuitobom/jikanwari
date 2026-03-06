@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - claude/init-schedule-app-JtnmT
 
 jobs:
   build-and-deploy:
