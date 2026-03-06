@@ -3,7 +3,8 @@ name: Deploy to Firebase Hosting
 on:
   push:
     branches:
-      - master
+      - main
+      - claude/init-schedule-app-JtnmT
 
 jobs:
   build-and-deploy:
