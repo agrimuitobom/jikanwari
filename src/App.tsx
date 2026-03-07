@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Teacher, Subject, Assignment, CreateInput } from './types'
 
+import { useAuth } from './hooks/useAuth'
 import { useTeachers } from './hooks/useTeachers'
 import { useSubjects } from './hooks/useSubjects'
 import { useAssignments } from './hooks/useAssignments'
@@ -299,7 +300,20 @@ function ScheduleSection() {
 // ============================================================
 
 function App() {
+  const { loading: authLoading, error: authError } = useAuth()
   const [activeTab, setActiveTab] = useState<Tab>('teachers')
+
+  if (authLoading) {
+    return <LoadingSpinner message="認証中..." />
+  }
+
+  if (authError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <ErrorAlert message={`認証エラー: ${authError.message}`} />
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
