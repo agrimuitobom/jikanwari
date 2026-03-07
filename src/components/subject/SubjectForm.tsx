@@ -1,10 +1,12 @@
 import { useState } from 'react'
-import type { Subject, CreateInput, Period } from '../../types'
+import type { Subject, CreateInput, Period, Grade, SubjectCategory } from '../../types'
 import { ErrorAlert } from '../common/ErrorAlert'
-import { PERIODS, SUBJECT_COLORS } from '../../utils/constants'
+import { PERIODS, GRADES, GRADE_LABELS, SUBJECT_CATEGORIES, SUBJECT_COLORS } from '../../utils/constants'
 
 interface FormState {
   name: string
+  grade: Grade
+  category: SubjectCategory
   credits: number
   weeklyFrequency: number
   isConsecutive: boolean
@@ -58,6 +60,8 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
 
   const [form, setForm] = useState<FormState>({
     name: initialValues?.name ?? '',
+    grade: initialValues?.grade ?? 1,
+    category: initialValues?.category ?? '国語',
     credits: initialValues?.credits ?? 2,
     weeklyFrequency: initialValues?.weeklyFrequency ?? 2,
     isConsecutive: initialValues?.isConsecutive ?? false,
@@ -99,6 +103,8 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
     try {
       await onSubmit({
         name: form.name.trim(),
+        grade: form.grade,
+        category: form.category,
         credits: form.credits,
         weeklyFrequency: form.weeklyFrequency,
         isConsecutive: form.isConsecutive,
@@ -142,6 +148,43 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
             placeholder="例：数学Ⅱ"
             required
           />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="subject-grade" className="form-label">
+              履修学年 <span className="text-red-500">*</span>
+            </label>
+            <select
+              id="subject-grade"
+              value={form.grade}
+              onChange={(e) => setForm((p) => ({ ...p, grade: Number(e.target.value) as Grade }))}
+              className="form-select"
+            >
+              {GRADES.map((g) => (
+                <option key={g} value={g}>
+                  {GRADE_LABELS[g]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="subject-category" className="form-label">
+              教科 <span className="text-red-500">*</span>
+            </label>
+            <select
+              id="subject-category"
+              value={form.category}
+              onChange={(e) => setForm((p) => ({ ...p, category: e.target.value as SubjectCategory }))}
+              className="form-select"
+            >
+              {SUBJECT_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">

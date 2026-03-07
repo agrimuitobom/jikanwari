@@ -77,6 +77,8 @@ function docToSubject(snap: QueryDocumentSnapshot): Subject {
   return {
     id: snap.id,
     name: d.name as string,
+    grade: (d.grade as number ?? 1) as Subject['grade'],
+    category: (d.category as string ?? '国語') as Subject['category'],
     credits: d.credits as number,
     weeklyFrequency: d.weeklyFrequency as number,
     isConsecutive: d.isConsecutive as boolean,
@@ -107,6 +109,8 @@ export async function addSubject(input: CreateInput<Subject>): Promise<Subject> 
 
   const docRef = await addDoc(subjectsRef, {
     name: input.name,
+    grade: input.grade,
+    category: input.category,
     credits: input.credits,
     weeklyFrequency: input.weeklyFrequency,
     isConsecutive: input.isConsecutive,
