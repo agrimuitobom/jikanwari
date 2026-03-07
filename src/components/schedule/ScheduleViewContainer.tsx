@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import type { DayOfWeek, Period, Teacher, Subject, Assignment, ScheduleEntry, TimeSlot } from '../../types'
 import { CLASS_OPTIONS } from '../../utils/constants'
-import { runScheduler } from '../../utils/scheduler'
+import { runSchedulerInWorker } from '../../utils/runSchedulerWorker'
 import type { SchedulerProgress, SchedulerResult, UnplacedTask } from '../../utils/scheduler'
 import { useSchedules } from '../../hooks/useSchedules'
 import { ErrorAlert } from '../common/ErrorAlert'
@@ -153,7 +153,31 @@ export function ScheduleViewContainer({
   const [editingNameValue, setEditingNameValue] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // ---- スケジューラ実行 ----
+  // ---- Undo履歴 ----
+  type UndoState = { entries: ScheduleEntry[]; unplacedTasks: UnplacedTask[] }
+  const undoStackRef = useRef<UndoState[]>([])
+  const MAX_UNDO = 20
+
+  const pushUndo = useCallback(() => {
+    undoStackRef.current = [
+      ...undoStackRef.current.slice(-(MAX_UNDO - 1)),
+      { entries: [...entries], unplacedTasks: [...unplacedTasks] },
+    ]
+  }, [entries, unplacedTasks])
+
+  const handleUndo = useCallback(() => {
+    const stack = undoStackRef.current
+    if (stack.length === 0) return
+    const prev = stack[stack.length - 1]
+    undoStackRef.current = stack.slice(0, -1)
+    setEntries(prev.entries)
+    setUnplacedTasks(prev.unplacedTasks)
+    if (activeScheduleId) {
+      updateScheduleEntries(activeScheduleId, prev.entries, prev.unplacedTasks)
+    }
+  }, [activeScheduleId, updateScheduleEntries])
+
+  // ---- スケジューラ実行（Web Worker） ----
   const handleGenerate = useCallback(async () => {
     if (assignments.length === 0) return
 
@@ -161,9 +185,10 @@ export function ScheduleViewContainer({
     setProgress(null)
     setResult(null)
     setActiveScheduleId(null)
+    undoStackRef.current = []
 
     try {
-      const res = await runScheduler(teachers, subjects, assignments, (p) => {
+      const res = await runSchedulerInWorker(teachers, subjects, assignments, (p) => {
         setProgress(p)
       })
       setEntries(res.entries)
@@ -232,6 +257,7 @@ export function ScheduleViewContainer({
       )
       if (error) return error
 
+      pushUndo()
       const newEntries = entries.map((e) =>
         e.id === entryId ? { ...e, day: toDay, period: toPeriod } : e,
       )
@@ -244,7 +270,7 @@ export function ScheduleViewContainer({
 
       return null
     },
-    [entries, assignments, teachers, activeScheduleId, unplacedTasks, updateScheduleEntries],
+    [entries, assignments, teachers, activeScheduleId, unplacedTasks, updateScheduleEntries, pushUndo],
   )
 
   // ---- DnD: 未配置アイテムのドロップ ----
@@ -256,6 +282,7 @@ export function ScheduleViewContainer({
       const error = validateMove(entries, assignments, teachers, assignmentId, day, period)
       if (error) return error
 
+      pushUndo()
       const newEntry: ScheduleEntry = {
         id: `manual-${day}-${period}-${assignment.classId}-${Date.now()}`,
         day,
@@ -280,7 +307,7 @@ export function ScheduleViewContainer({
 
       return null
     },
-    [entries, assignments, teachers, unplacedTasks, activeScheduleId, updateScheduleEntries],
+    [entries, assignments, teachers, unplacedTasks, activeScheduleId, updateScheduleEntries, pushUndo],
   )
 
   // ---- ビューモード切替時のターゲットリセット ----
@@ -383,9 +410,21 @@ export function ScheduleViewContainer({
           {/* スペーサー */}
           <div className="flex-1" />
 
-          {/* エクスポート */}
+          {/* Undo + エクスポート */}
           {entries.length > 0 && (
             <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleUndo}
+                disabled={undoStackRef.current.length === 0}
+                className="btn-secondary text-xs"
+                title="元に戻す (Undo)"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+                  <path fillRule="evenodd" d="M2.22 4.22a.75.75 0 0 1 1.06 0L6 6.94l2.72-2.72a.75.75 0 1 1 1.06 1.06L7.06 8l2.72 2.72a.75.75 0 1 1-1.06 1.06L6 9.06l-2.72 2.72a.75.75 0 0 1-1.06-1.06L4.94 8 2.22 5.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                </svg>
+                元に戻す
+              </button>
               <button
                 type="button"
                 onClick={() => exportToCsv(entries, assignments, subjects, teachers)}

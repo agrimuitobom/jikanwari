@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import type { Teacher, Subject, Assignment, CreateInput } from './types'
 
 import { useAuth } from './hooks/useAuth'
@@ -17,6 +17,7 @@ import { SubjectList } from './components/subject/SubjectList'
 import { SubjectCsvImport } from './components/subject/SubjectCsvImport'
 
 import { AssignmentForm } from './components/assignment/AssignmentForm'
+import { AssignmentBulkForm } from './components/assignment/AssignmentBulkForm'
 import { AssignmentList } from './components/assignment/AssignmentList'
 
 import { ScheduleViewContainer } from './components/schedule/ScheduleViewContainer'
@@ -33,6 +34,30 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'assignments', label: '授業割当' },
   { id: 'schedule', label: '時間割' },
 ]
+
+const VALID_TABS = new Set<string>(TABS.map((t) => t.id))
+
+function getTabFromHash(): Tab {
+  const hash = window.location.hash.replace('#', '')
+  return VALID_TABS.has(hash) ? (hash as Tab) : 'teachers'
+}
+
+function useHashTab() {
+  const [activeTab, setActiveTab] = useState<Tab>(getTabFromHash)
+
+  useEffect(() => {
+    const onHashChange = () => setActiveTab(getTabFromHash())
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
+  const navigate = useCallback((tab: Tab) => {
+    window.location.hash = tab
+    setActiveTab(tab)
+  }, [])
+
+  return { activeTab, navigate }
+}
 
 // ============================================================
 // 教員管理セクション
@@ -215,17 +240,26 @@ function AssignmentSection() {
 
   const [editTarget, setEditTarget] = useState<Assignment | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [showBulkForm, setShowBulkForm] = useState(false)
 
   const openCreate = () => {
     setEditTarget(null)
     setShowForm(true)
+    setShowBulkForm(false)
+  }
+  const openBulk = () => {
+    setShowBulkForm(true)
+    setShowForm(false)
+    setEditTarget(null)
   }
   const openEdit = (a: Assignment) => {
     setEditTarget(a)
     setShowForm(true)
+    setShowBulkForm(false)
   }
   const closeForm = () => {
     setShowForm(false)
+    setShowBulkForm(false)
     setEditTarget(null)
   }
 
@@ -238,13 +272,30 @@ function AssignmentSection() {
     closeForm()
   }
 
+  const handleBulkSubmit = async (inputs: CreateInput<Assignment>[]) => {
+    for (const input of inputs) {
+      await addAssignment(input)
+    }
+    closeForm()
+  }
+
   if (loading) return <LoadingSpinner message="授業割当データを読み込み中..." />
 
   return (
     <div className="space-y-4">
       {error && <ErrorAlert message={error.message} onDismiss={clearError} />}
 
-      {showForm ? (
+      {showBulkForm ? (
+        <div className="card p-6 sm:p-8">
+          <AssignmentBulkForm
+            teachers={teachers}
+            subjects={subjects}
+            existingAssignments={assignments}
+            onSubmit={handleBulkSubmit}
+            onCancel={closeForm}
+          />
+        </div>
+      ) : showForm ? (
         <div className="card p-6 sm:p-8">
           <AssignmentForm
             initialValues={editTarget ?? undefined}
@@ -256,7 +307,14 @@ function AssignmentSection() {
         </div>
       ) : (
         <>
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={openBulk} className="btn-secondary">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                <path d="M7.25 10.25a.75.75 0 0 0 1.5 0V4.56l1.97 1.97a.75.75 0 1 0 1.06-1.06l-3.25-3.25a.75.75 0 0 0-1.06 0L4.22 5.47a.75.75 0 0 0 1.06 1.06l1.97-1.97v5.69Z" />
+                <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
+              </svg>
+              一括登録
+            </button>
             <button type="button" onClick={openCreate} className="btn-primary">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
                 <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
@@ -301,7 +359,7 @@ function ScheduleSection() {
 
 function App() {
   const { loading: authLoading, error: authError } = useAuth()
-  const [activeTab, setActiveTab] = useState<Tab>('teachers')
+  const { activeTab, navigate: setActiveTab } = useHashTab()
 
   if (authLoading) {
     return <LoadingSpinner message="認証中..." />
