@@ -339,6 +339,88 @@ function calculateScore(
 }
 
 // ============================================================
+// 未配置理由の詳細診断
+// ============================================================
+
+function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask {
+  const { assignment, teachers, isConsecutive } = task
+  const reasons: string[] = []
+
+  // 各曜日×時限ごとにブロック要因を集計
+  let totalSlots = 0
+  let classConflicts = 0
+  let teacherUnavailable = 0
+  let teacherConflicts = 0
+  const unavailableTeachers = new Set<string>()
+  const conflictingTeachers = new Set<string>()
+
+  for (const day of DAYS) {
+    const periods = isConsecutive ? CONSECUTIVE_STARTS : PERIODS
+    for (const period of periods) {
+      const checkPeriods: Period[] = isConsecutive
+        ? [period, (period + 1) as Period]
+        : [period]
+      totalSlots++
+
+      let blockedByClass = false
+      let blockedByTeacherAvail = false
+      let blockedByTeacherConflict = false
+
+      for (const p of checkPeriods) {
+        if (!isSlotFreeForClass(state, day, p, assignment.classId)) {
+          blockedByClass = true
+        }
+        for (const teacher of teachers) {
+          if (!isTeacherAvailable(teacher, day, p)) {
+            blockedByTeacherAvail = true
+            unavailableTeachers.add(teacher.name)
+          } else if (!isSlotFreeForTeacher(state, day, p, teacher.id)) {
+            blockedByTeacherConflict = true
+            conflictingTeachers.add(teacher.name)
+          }
+        }
+      }
+
+      if (blockedByClass) classConflicts++
+      if (blockedByTeacherAvail) teacherUnavailable++
+      if (blockedByTeacherConflict) teacherConflicts++
+    }
+  }
+
+  // 理由を具体的に構築
+  if (classConflicts === totalSlots) {
+    reasons.push('全コマでクラスの授業が重複')
+  } else if (classConflicts > 0) {
+    reasons.push(`${classConflicts}/${totalSlots}コマでクラス重複`)
+  }
+
+  if (teacherUnavailable > 0) {
+    const names = Array.from(unavailableTeachers).join('・')
+    reasons.push(`${names}の勤務日外・除外コマにより${teacherUnavailable}/${totalSlots}コマ不可`)
+  }
+
+  if (teacherConflicts > 0) {
+    const names = Array.from(conflictingTeachers).join('・')
+    reasons.push(`${names}の他授業との重複で${teacherConflicts}/${totalSlots}コマ不可`)
+  }
+
+  if (isConsecutive) {
+    reasons.push('連続2コマの空きペアが必要')
+  }
+
+  if (reasons.length === 0) {
+    reasons.push('他の授業との組み合わせにより配置不可')
+  }
+
+  return {
+    assignmentId: assignment.id,
+    classId: assignment.classId,
+    subjectId: assignment.subjectId,
+    reason: reasons.join('／'),
+  }
+}
+
+// ============================================================
 // メイン: バックトラッキングスケジューラ（ジェネレータ）
 // ============================================================
 
@@ -460,14 +542,9 @@ export function* generateSchedule(
         assignmentMap,
       )
       if (partialScore > bestResult.score) {
-        const unplaced = allTasks.slice(frame.taskIndex).map((t) => ({
-          assignmentId: t.assignment.id,
-          classId: t.assignment.classId,
-          subjectId: t.assignment.subjectId,
-          reason: t.isConsecutive
-            ? '連続授業の配置可能な枠がありません'
-            : '制約を満たす空き枠がありません',
-        }))
+        const unplaced = allTasks.slice(frame.taskIndex).map((t) =>
+          diagnoseUnplaced(t, state),
+        )
         bestResult = {
           entries: [...state.entries],
           score: partialScore,
