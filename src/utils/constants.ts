@@ -65,18 +65,28 @@ export interface ClassOption {
   displayName: string
 }
 
-export const CLASS_OPTIONS: ClassOption[] = [
-  { id: 'grade1-class1', grade: 1, classNumber: 1, displayName: '1年1組' },
-  { id: 'grade1-class2', grade: 1, classNumber: 2, displayName: '1年2組' },
-  { id: 'grade1-class3', grade: 1, classNumber: 3, displayName: '1年3組' },
-  { id: 'grade2-class1', grade: 2, classNumber: 1, displayName: '2年1組' },
-  { id: 'grade2-class2', grade: 2, classNumber: 2, displayName: '2年2組' },
-  { id: 'grade2-class3', grade: 2, classNumber: 3, displayName: '2年3組' },
-  { id: 'grade3-class1', grade: 3, classNumber: 1, displayName: '3年1組' },
-  { id: 'grade3-class2', grade: 3, classNumber: 2, displayName: '3年2組' },
-  { id: 'grade3-class3', grade: 3, classNumber: 3, displayName: '3年3組' },
-]
+/** デフォルトの3組構成のクラス一覧 */
+export const CLASS_OPTIONS: ClassOption[] = buildClassOptions(3)
+
+/** 学年あたりのクラス数を指定してクラス一覧を動的生成する */
+export function buildClassOptions(classesPerGrade: number): ClassOption[] {
+  const options: ClassOption[] = []
+  for (const grade of GRADES) {
+    for (let cn = 1; cn <= classesPerGrade; cn++) {
+      options.push({
+        id: `grade${grade}-class${cn}`,
+        grade,
+        classNumber: cn as ClassNumber,
+        displayName: `${grade}年${cn}組`,
+      })
+    }
+  }
+  return options
+}
 
 export function getClassLabel(classId: string): string {
-  return CLASS_OPTIONS.find((c) => c.id === classId)?.displayName ?? classId
+  // idからフォールバック表示名を生成（grade1-class2 → "1年2組"）
+  const match = classId.match(/^grade(\d+)-class(\d+)$/)
+  if (match) return `${match[1]}年${match[2]}組`
+  return classId
 }

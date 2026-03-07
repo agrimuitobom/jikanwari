@@ -39,8 +39,12 @@ function UnplacedCard({
     <div
       draggable
       onDragStart={handleDragStart}
-      className="rounded-lg border border-gray-200 bg-white p-3 cursor-grab active:cursor-grabbing shadow-sm hover:shadow transition-shadow"
+      className="rounded-lg border border-gray-200 bg-white p-3 cursor-grab active:cursor-grabbing shadow-sm hover:shadow transition-shadow shrink-0 lg:shrink w-48 lg:w-auto"
       style={{ borderLeftWidth: 4, borderLeftColor: borderColor }}
+      role="listitem"
+      aria-roledescription="ドラッグ可能な未配置授業"
+      aria-label={`${subject?.name ?? '不明な科目'} ${getClassLabel(task.classId)}`}
+      tabIndex={0}
     >
       <div className="text-sm font-semibold text-gray-800">
         {subject?.name ?? '不明な科目'}
@@ -100,7 +104,7 @@ export function UnplacedSidebar({
       <p className="text-xs text-gray-400">
         ドラッグして空きコマに配置できます
       </p>
-      <div className="space-y-2 max-h-[calc(100vh-280px)] overflow-y-auto pr-1">
+      <div className="flex lg:flex-col gap-2 overflow-x-auto lg:overflow-x-visible lg:overflow-y-auto lg:max-h-[calc(100vh-280px)] pb-2 lg:pb-0 lg:pr-1" role="list" aria-label="未配置の授業一覧">
         {unplacedTasks.map((task) => {
           const assignment = assignmentMap.get(task.assignmentId)
           const subject = subjectMap.get(task.subjectId)

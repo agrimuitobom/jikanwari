@@ -4,6 +4,7 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  getDoc,
   onSnapshot,
   query,
   where,
@@ -63,6 +64,38 @@ export function validateAssignment(
   }
 }
 
+/**
+ * teacherIds / subjectId が Firestore 上に実在するか検証する。
+ * 存在しないIDがあれば Error をスローする。
+ */
+async function validateReferences(
+  input: CreateInput<Assignment> | UpdateInput<Assignment>,
+): Promise<void> {
+  // subjectId の存在チェック
+  if ('subjectId' in input && input.subjectId) {
+    const subjectSnap = await getDoc(doc(db, COLLECTION.SUBJECTS, input.subjectId))
+    if (!subjectSnap.exists()) {
+      throw new Error('指定された科目が存在しません')
+    }
+  }
+
+  // teacherIds の存在チェック
+  if ('teacherIds' in input && input.teacherIds && input.teacherIds.length > 0) {
+    const checks = await Promise.all(
+      input.teacherIds.map(async (id) => {
+        const snap = await getDoc(doc(db, COLLECTION.TEACHERS, id))
+        return { id, exists: snap.exists() }
+      }),
+    )
+    const missing = checks.filter((c) => !c.exists)
+    if (missing.length > 0) {
+      throw new Error(
+        `指定された教員が存在しません（ID: ${missing.map((m) => m.id).join(', ')}）`,
+      )
+    }
+  }
+}
+
 // ============================================================
 // Firestore DocumentSnapshot → Assignment 変換
 // ============================================================
@@ -96,6 +129,7 @@ const assignmentsRef = collection(db, COLLECTION.ASSIGNMENTS)
 
 export async function addAssignment(input: CreateInput<Assignment>): Promise<Assignment> {
   validateAssignment(input)
+  await validateReferences(input)
 
   const docRef = await addDoc(assignmentsRef, {
     classId: input.classId,
@@ -121,6 +155,7 @@ export async function updateAssignment(
   input: UpdateInput<Assignment>,
 ): Promise<void> {
   validateAssignment(input)
+  await validateReferences(input)
 
   const docRef = doc(db, COLLECTION.ASSIGNMENTS, id)
   await updateDoc(docRef, {

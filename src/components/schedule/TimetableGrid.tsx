@@ -108,6 +108,10 @@ function TimetableCell({
   dropError: string | null
   isDropTarget: boolean
 }) {
+  const cellLabel = cells.length > 0
+    ? cells.map((c) => `${c.subject.name} ${c.teacherNames.join(' ')}`).join('、')
+    : '空きコマ'
+
   if (cells.length === 0) {
     return (
       <td
@@ -117,9 +121,11 @@ function TimetableCell({
         ].join(' ')}
         onDragOver={onDragOver}
         onDrop={(e) => onDrop(e, day, period)}
+        role="gridcell"
+        aria-label={cellLabel}
       >
         {dropError && (
-          <div className="p-1 text-[10px] text-red-500 font-medium">{dropError}</div>
+          <div className="p-1 text-[10px] text-red-500 font-medium" role="alert">{dropError}</div>
         )}
       </td>
     )
@@ -133,6 +139,8 @@ function TimetableCell({
       ].join(' ')}
       onDragOver={onDragOver}
       onDrop={(e) => onDrop(e, day, period)}
+      role="gridcell"
+      aria-label={cellLabel}
     >
       {cells.map((cell) => {
         const bgColor = cell.subject.color
@@ -150,6 +158,10 @@ function TimetableCell({
               backgroundColor: bgColor,
               borderLeft: `3px solid ${borderColor}`,
             }}
+            role="button"
+            aria-roledescription="ドラッグ可能な授業コマ"
+            aria-label={`${cell.subject.name} ${cell.teacherNames.join(' ')}${cell.entry.isConsecutiveSecond ? ' (続き)' : ''}`}
+            tabIndex={0}
           >
             <div className="font-semibold text-gray-800 truncate">
               {cell.subject.name}
@@ -167,7 +179,7 @@ function TimetableCell({
         )
       })}
       {dropError && (
-        <div className="p-1 text-[10px] text-red-500 font-medium">{dropError}</div>
+        <div className="p-1 text-[10px] text-red-500 font-medium" role="alert">{dropError}</div>
       )}
     </td>
   )
@@ -242,8 +254,8 @@ export function TimetableGrid({
   }, [])
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse table-fixed">
+    <div className="overflow-x-auto" role="region" aria-label="時間割表">
+      <table className="w-full min-w-[600px] border-collapse table-fixed" role="grid" aria-label="時間割グリッド">
         <colgroup>
           <col className="w-12" />
           {DAYS.map((d) => (
@@ -252,13 +264,14 @@ export function TimetableGrid({
         </colgroup>
         <thead>
           <tr>
-            <th className="border border-gray-200 bg-gray-100 px-2 py-2.5 text-xs font-semibold text-gray-600">
+            <th className="border border-gray-200 bg-gray-100 px-2 py-2.5 text-xs font-semibold text-gray-600" scope="col">
               時限
             </th>
             {DAYS.map((day) => (
               <th
                 key={day}
                 className="border border-gray-200 bg-gray-100 px-2 py-2.5 text-sm font-semibold text-gray-700"
+                scope="col"
               >
                 {DAY_LABELS[day]}
               </th>
@@ -268,7 +281,7 @@ export function TimetableGrid({
         <tbody>
           {PERIODS.map((period) => (
             <tr key={period}>
-              <th className="border border-gray-200 bg-gray-100 px-2 py-2 text-sm font-semibold text-gray-600">
+              <th className="border border-gray-200 bg-gray-100 px-2 py-2 text-sm font-semibold text-gray-600" scope="row">
                 {period}
               </th>
               {DAYS.map((day) => {

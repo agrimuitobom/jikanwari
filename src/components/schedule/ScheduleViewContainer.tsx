@@ -1,24 +1,14 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import type { DayOfWeek, Period, Teacher, Subject, Assignment, ScheduleEntry, TimeSlot } from '../../types'
 import { CLASS_OPTIONS } from '../../utils/constants'
-import { runScheduler } from '../../utils/scheduler'
-import type { SchedulerProgress, SchedulerResult, UnplacedTask } from '../../utils/scheduler'
+import type { ClassOption } from '../../utils/constants'
+import { runSchedulerInWorker } from '../../utils/runSchedulerWorker'
+import type { SchedulerProgress, SchedulerResult, UnplacedTask, SchedulerOptions } from '../../utils/scheduler'
+import { useSchedules } from '../../hooks/useSchedules'
+import { ErrorAlert } from '../common/ErrorAlert'
 import { TimetableGrid } from './TimetableGrid'
 import type { ViewMode } from './TimetableGrid'
 import { UnplacedSidebar } from './UnplacedSidebar'
-
-// ============================================================
-// スナップショット型
-// ============================================================
-
-interface ScheduleSnapshot {
-  id: number
-  name: string
-  entries: ScheduleEntry[]
-  unplacedTasks: UnplacedTask[]
-  result: SchedulerResult
-  createdAt: Date
-}
 
 // ============================================================
 // Props
@@ -28,6 +18,8 @@ export interface ScheduleViewContainerProps {
   teachers: Teacher[]
   subjects: Subject[]
   assignments: Assignment[]
+  classOptions?: ClassOption[]
+  schedulerOptions?: SchedulerOptions
 }
 
 // ============================================================
@@ -137,11 +129,13 @@ export function ScheduleViewContainer({
   teachers,
   subjects,
   assignments,
+  classOptions = CLASS_OPTIONS,
+  schedulerOptions,
 }: ScheduleViewContainerProps) {
   // ---- State ----
   const [viewMode, setViewMode] = useState<ViewMode>('class')
   const [selectedTargetId, setSelectedTargetId] = useState<string>(
-    CLASS_OPTIONS[0]?.id ?? '',
+    classOptions[0]?.id ?? '',
   )
   const [entries, setEntries] = useState<ScheduleEntry[]>([])
   const [unplacedTasks, setUnplacedTasks] = useState<UnplacedTask[]>([])
@@ -149,71 +143,107 @@ export function ScheduleViewContainer({
   const [progress, setProgress] = useState<SchedulerProgress | null>(null)
   const [result, setResult] = useState<SchedulerResult | null>(null)
 
-  // ---- スナップショット ----
-  const [snapshots, setSnapshots] = useState<ScheduleSnapshot[]>([])
-  const [activeSnapshotId, setActiveSnapshotId] = useState<number | null>(null)
-  const [nextSnapshotId, setNextSnapshotId] = useState(1)
-  const [editingNameId, setEditingNameId] = useState<number | null>(null)
+  // ---- Firestore永続化スケジュール ----
+  const {
+    schedules,
+    error: schedulesError,
+    clearError: clearSchedulesError,
+    saveSchedule,
+    renameSchedule,
+    updateEntries: updateScheduleEntries,
+    deleteSchedule,
+  } = useSchedules()
+  const [activeScheduleId, setActiveScheduleId] = useState<string | null>(null)
+  const [editingNameId, setEditingNameId] = useState<string | null>(null)
   const [editingNameValue, setEditingNameValue] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  // ---- スケジューラ実行 ----
+  // ---- Undo履歴 ----
+  type UndoState = { entries: ScheduleEntry[]; unplacedTasks: UnplacedTask[] }
+  const undoStackRef = useRef<UndoState[]>([])
+  const MAX_UNDO = 20
+
+  const pushUndo = useCallback(() => {
+    undoStackRef.current = [
+      ...undoStackRef.current.slice(-(MAX_UNDO - 1)),
+      { entries: [...entries], unplacedTasks: [...unplacedTasks] },
+    ]
+  }, [entries, unplacedTasks])
+
+  const handleUndo = useCallback(() => {
+    const stack = undoStackRef.current
+    if (stack.length === 0) return
+    const prev = stack[stack.length - 1]
+    undoStackRef.current = stack.slice(0, -1)
+    setEntries(prev.entries)
+    setUnplacedTasks(prev.unplacedTasks)
+    if (activeScheduleId) {
+      updateScheduleEntries(activeScheduleId, prev.entries, prev.unplacedTasks)
+    }
+  }, [activeScheduleId, updateScheduleEntries])
+
+  // ---- スケジューラ実行（Web Worker） ----
   const handleGenerate = useCallback(async () => {
     if (assignments.length === 0) return
 
     setIsRunning(true)
     setProgress(null)
     setResult(null)
+    setActiveScheduleId(null)
+    undoStackRef.current = []
 
     try {
-      const res = await runScheduler(teachers, subjects, assignments, (p) => {
+      const res = await runSchedulerInWorker(teachers, subjects, assignments, (p) => {
         setProgress(p)
-      })
+      }, schedulerOptions)
       setEntries(res.entries)
       setUnplacedTasks(res.unplacedTasks)
       setResult(res)
     } finally {
       setIsRunning(false)
     }
-  }, [teachers, subjects, assignments])
+  }, [teachers, subjects, assignments, schedulerOptions])
 
-  // ---- スナップショット操作 ----
-  const handleSaveSnapshot = useCallback(() => {
+  // ---- Firestoreに保存 ----
+  const handleSaveToFirestore = useCallback(async () => {
     if (!result) return
-    const id = nextSnapshotId
-    const snap: ScheduleSnapshot = {
-      id,
-      name: `案${id}`,
-      entries: [...entries],
-      unplacedTasks: [...unplacedTasks],
-      result: { ...result },
-      createdAt: new Date(),
+    setSaving(true)
+    try {
+      const name = `案${schedules.length + 1}`
+      const saved = await saveSchedule(name, result, unplacedTasks)
+      setActiveScheduleId(saved.id)
+    } finally {
+      setSaving(false)
     }
-    setSnapshots((prev) => [...prev, snap])
-    setActiveSnapshotId(id)
-    setNextSnapshotId((n) => n + 1)
-  }, [result, entries, unplacedTasks, nextSnapshotId])
+  }, [result, unplacedTasks, schedules.length, saveSchedule])
 
-  const handleRestoreSnapshot = useCallback((snapId: number) => {
-    const snap = snapshots.find((s) => s.id === snapId)
-    if (!snap) return
-    setEntries([...snap.entries])
-    setUnplacedTasks([...snap.unplacedTasks])
-    setResult({ ...snap.result })
-    setActiveSnapshotId(snapId)
-  }, [snapshots])
+  // ---- 保存済みスケジュールの復元 ----
+  const handleRestoreSchedule = useCallback((scheduleId: string) => {
+    const sched = schedules.find((s) => s.id === scheduleId)
+    if (!sched) return
+    setEntries([...sched.entries])
+    setUnplacedTasks([...sched.unplacedTasks])
+    setResult({
+      entries: sched.entries,
+      score: sched.score,
+      isComplete: sched.isComplete,
+      unplacedTasks: sched.unplacedTasks,
+    })
+    setActiveScheduleId(scheduleId)
+  }, [schedules])
 
-  const handleDeleteSnapshot = useCallback((snapId: number) => {
-    setSnapshots((prev) => prev.filter((s) => s.id !== snapId))
-    if (activeSnapshotId === snapId) setActiveSnapshotId(null)
-  }, [activeSnapshotId])
+  // ---- 保存済みスケジュールの削除 ----
+  const handleDeleteSchedule = useCallback(async (scheduleId: string) => {
+    await deleteSchedule(scheduleId)
+    if (activeScheduleId === scheduleId) setActiveScheduleId(null)
+  }, [activeScheduleId, deleteSchedule])
 
-  const handleRenameSnapshot = useCallback((snapId: number, newName: string) => {
+  // ---- 名前変更 ----
+  const handleRenameSchedule = useCallback(async (scheduleId: string, newName: string) => {
     if (!newName.trim()) return
-    setSnapshots((prev) =>
-      prev.map((s) => (s.id === snapId ? { ...s, name: newName.trim() } : s)),
-    )
+    await renameSchedule(scheduleId, newName)
     setEditingNameId(null)
-  }, [])
+  }, [renameSchedule])
 
   // ---- DnD: 配置済みエントリの移動 ----
   const handleMoveEntry = useCallback(
@@ -232,14 +262,20 @@ export function ScheduleViewContainer({
       )
       if (error) return error
 
-      setEntries((prev) =>
-        prev.map((e) =>
-          e.id === entryId ? { ...e, day: toDay, period: toPeriod } : e,
-        ),
+      pushUndo()
+      const newEntries = entries.map((e) =>
+        e.id === entryId ? { ...e, day: toDay, period: toPeriod } : e,
       )
+      setEntries(newEntries)
+
+      // アクティブなスケジュールがあればFirestoreも更新
+      if (activeScheduleId) {
+        updateScheduleEntries(activeScheduleId, newEntries, unplacedTasks)
+      }
+
       return null
     },
-    [entries, assignments, teachers],
+    [entries, assignments, teachers, activeScheduleId, unplacedTasks, updateScheduleEntries, pushUndo],
   )
 
   // ---- DnD: 未配置アイテムのドロップ ----
@@ -251,6 +287,7 @@ export function ScheduleViewContainer({
       const error = validateMove(entries, assignments, teachers, assignmentId, day, period)
       if (error) return error
 
+      pushUndo()
       const newEntry: ScheduleEntry = {
         id: `manual-${day}-${period}-${assignment.classId}-${Date.now()}`,
         day,
@@ -261,20 +298,28 @@ export function ScheduleViewContainer({
         updatedAt: new Date(),
       }
 
-      setEntries((prev) => [...prev, newEntry])
-      setUnplacedTasks((prev) =>
-        prev.filter((t) => !(t.assignmentId === assignmentId && t.classId === assignment.classId)),
+      const newEntries = [...entries, newEntry]
+      const newUnplaced = unplacedTasks.filter(
+        (t) => !(t.assignmentId === assignmentId && t.classId === assignment.classId),
       )
+      setEntries(newEntries)
+      setUnplacedTasks(newUnplaced)
+
+      // アクティブなスケジュールがあればFirestoreも更新
+      if (activeScheduleId) {
+        updateScheduleEntries(activeScheduleId, newEntries, newUnplaced)
+      }
+
       return null
     },
-    [entries, assignments, teachers],
+    [entries, assignments, teachers, unplacedTasks, activeScheduleId, updateScheduleEntries, pushUndo],
   )
 
   // ---- ビューモード切替時のターゲットリセット ----
   const handleViewModeChange = (mode: ViewMode) => {
     setViewMode(mode)
     if (mode === 'class') {
-      setSelectedTargetId(CLASS_OPTIONS[0]?.id ?? '')
+      setSelectedTargetId(classOptions[0]?.id ?? '')
     } else {
       setSelectedTargetId(teachers[0]?.id ?? '')
     }
@@ -285,9 +330,13 @@ export function ScheduleViewContainer({
 
   return (
     <div className="space-y-4">
+      {schedulesError && (
+        <ErrorAlert message={schedulesError.message} onDismiss={clearSchedulesError} />
+      )}
+
       {/* ツールバー */}
-      <div className="card p-4">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="card p-3 sm:p-4">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {/* 自動生成ボタン */}
           <button
             type="button"
@@ -317,10 +366,11 @@ export function ScheduleViewContainer({
           <div className="h-8 w-px bg-gray-200" />
 
           {/* ビューモード切替 */}
-          <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+          <div className="flex rounded-lg border border-gray-300 overflow-hidden" role="group" aria-label="表示モード切替">
             <button
               type="button"
               onClick={() => handleViewModeChange('class')}
+              aria-pressed={viewMode === 'class'}
               className={[
                 'px-3 py-1.5 text-xs font-medium transition-colors',
                 viewMode === 'class'
@@ -333,6 +383,7 @@ export function ScheduleViewContainer({
             <button
               type="button"
               onClick={() => handleViewModeChange('teacher')}
+              aria-pressed={viewMode === 'teacher'}
               className={[
                 'px-3 py-1.5 text-xs font-medium transition-colors border-l border-gray-300',
                 viewMode === 'teacher'
@@ -349,9 +400,10 @@ export function ScheduleViewContainer({
             value={selectedTargetId}
             onChange={(e) => setSelectedTargetId(e.target.value)}
             className="form-select w-auto text-sm"
+            aria-label={viewMode === 'class' ? 'クラス選択' : '教員選択'}
           >
             {viewMode === 'class'
-              ? CLASS_OPTIONS.map((c) => (
+              ? classOptions.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.displayName}
                   </option>
@@ -366,9 +418,21 @@ export function ScheduleViewContainer({
           {/* スペーサー */}
           <div className="flex-1" />
 
-          {/* エクスポート */}
+          {/* Undo + エクスポート */}
           {entries.length > 0 && (
             <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleUndo}
+                disabled={undoStackRef.current.length === 0}
+                className="btn-secondary text-xs"
+                title="元に戻す (Undo)"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+                  <path fillRule="evenodd" d="M2.22 4.22a.75.75 0 0 1 1.06 0L6 6.94l2.72-2.72a.75.75 0 1 1 1.06 1.06L7.06 8l2.72 2.72a.75.75 0 1 1-1.06 1.06L6 9.06l-2.72 2.72a.75.75 0 0 1-1.06-1.06L4.94 8 2.22 5.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                </svg>
+                元に戻す
+              </button>
               <button
                 type="button"
                 onClick={() => exportToCsv(entries, assignments, subjects, teachers)}
@@ -389,14 +453,14 @@ export function ScheduleViewContainer({
 
         {/* 進捗バー */}
         {isRunning && progress && (
-          <div className="mt-3">
+          <div className="mt-3" role="status" aria-live="polite" aria-label="生成進捗">
             <div className="flex justify-between text-xs text-gray-500 mb-1">
               <span>
                 配置中: {progress.placed} / {progress.total}
               </span>
               <span>探索: {progress.iterations.toLocaleString()} 回</span>
             </div>
-            <div className="h-1.5 w-full rounded-full bg-gray-200">
+            <div className="h-1.5 w-full rounded-full bg-gray-200" role="progressbar" aria-valuenow={progress.placed} aria-valuemin={0} aria-valuemax={progress.total}>
               <div
                 className="h-1.5 rounded-full bg-primary-500 transition-all duration-300"
                 style={{
@@ -409,7 +473,7 @@ export function ScheduleViewContainer({
 
         {/* 結果サマリー */}
         {result && !isRunning && (
-          <div className="mt-3 flex items-center gap-3 text-sm">
+          <div className="mt-3 flex items-center gap-3 text-sm" role="status" aria-live="polite">
             <span
               className={[
                 'badge',
@@ -429,31 +493,32 @@ export function ScheduleViewContainer({
             <div className="flex-1" />
             <button
               type="button"
-              onClick={handleSaveSnapshot}
+              onClick={handleSaveToFirestore}
+              disabled={saving}
               className="btn-secondary text-xs"
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
                 <path d="M3.75 2A1.75 1.75 0 0 0 2 3.75v8.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 12.25v-5.5a.75.75 0 0 0-.22-.53l-4-4A.75.75 0 0 0 9.25 2H3.75Zm6.5 4a.75.75 0 0 1-.75-.75V3.56L11.94 6H10.25ZM5.75 9.5a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 0-1.5h-4.5Z" />
               </svg>
-              この結果を保存
+              {saving ? '保存中...' : 'この結果を保存'}
             </button>
           </div>
         )}
       </div>
 
-      {/* スナップショット一覧 */}
-      {snapshots.length > 0 && (
+      {/* 保存済みスケジュール一覧（Firestore永続化） */}
+      {schedules.length > 0 && (
         <div className="card p-4">
           <div className="flex items-center gap-2 mb-3">
             <h3 className="text-sm font-semibold text-gray-700">保存済みの時間割案</h3>
-            <span className="badge bg-gray-100 text-gray-600">{snapshots.length}件</span>
+            <span className="badge bg-gray-100 text-gray-600">{schedules.length}件</span>
           </div>
           <div className="flex flex-wrap gap-2">
-            {snapshots.map((snap) => {
-              const isActive = activeSnapshotId === snap.id
+            {schedules.map((sched) => {
+              const isActive = activeScheduleId === sched.id
               return (
                 <div
-                  key={snap.id}
+                  key={sched.id}
                   className={[
                     'group relative flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors',
                     isActive
@@ -462,14 +527,14 @@ export function ScheduleViewContainer({
                   ].join(' ')}
                 >
                   {/* 名前（ダブルクリックで編集） */}
-                  {editingNameId === snap.id ? (
+                  {editingNameId === sched.id ? (
                     <input
                       type="text"
                       value={editingNameValue}
                       onChange={(e) => setEditingNameValue(e.target.value)}
-                      onBlur={() => handleRenameSnapshot(snap.id, editingNameValue)}
+                      onBlur={() => handleRenameSchedule(sched.id, editingNameValue)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleRenameSnapshot(snap.id, editingNameValue)
+                        if (e.key === 'Enter') handleRenameSchedule(sched.id, editingNameValue)
                         if (e.key === 'Escape') setEditingNameId(null)
                       }}
                       className="w-20 rounded border border-gray-300 px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400"
@@ -478,37 +543,37 @@ export function ScheduleViewContainer({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => handleRestoreSnapshot(snap.id)}
+                      onClick={() => handleRestoreSchedule(sched.id)}
                       onDoubleClick={() => {
-                        setEditingNameId(snap.id)
-                        setEditingNameValue(snap.name)
+                        setEditingNameId(sched.id)
+                        setEditingNameValue(sched.name)
                       }}
                       className="font-medium text-gray-800"
                       title="クリックで復元、ダブルクリックで名前変更"
                     >
-                      {snap.name}
+                      {sched.name}
                     </button>
                   )}
 
                   {/* スコア */}
                   <span className={[
                     'text-xs',
-                    snap.result.isComplete ? 'text-green-600' : 'text-yellow-600',
+                    sched.isComplete ? 'text-green-600' : 'text-yellow-600',
                   ].join(' ')}>
-                    {snap.result.score}点
+                    {sched.score}点
                   </span>
 
                   {/* 未配置数 */}
-                  {snap.unplacedTasks.length > 0 && (
+                  {sched.unplacedTasks.length > 0 && (
                     <span className="text-xs text-red-400">
-                      残{snap.unplacedTasks.length}
+                      残{sched.unplacedTasks.length}
                     </span>
                   )}
 
                   {/* 削除ボタン */}
                   <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); handleDeleteSnapshot(snap.id) }}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteSchedule(sched.id) }}
                     className="ml-1 rounded p-0.5 text-gray-300 hover:bg-red-50 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
                     title="削除"
                   >
@@ -548,9 +613,9 @@ export function ScheduleViewContainer({
 
       {/* メイングリッド + サイドバー */}
       {entries.length > 0 && (
-        <div className="flex gap-4">
+        <div className="flex flex-col lg:flex-row gap-4">
           {/* グリッド */}
-          <div className="flex-1 card p-4 print:shadow-none print:border-none">
+          <div className="flex-1 min-w-0 card p-2 sm:p-4 print:shadow-none print:border-none">
             <TimetableGrid
               entries={entries}
               teachers={teachers}
@@ -565,7 +630,7 @@ export function ScheduleViewContainer({
 
           {/* 未配置サイドバー */}
           {unplacedTasks.length > 0 && (
-            <div className="w-64 shrink-0 print:hidden">
+            <div className="w-full lg:w-64 lg:shrink-0 print:hidden">
               <UnplacedSidebar
                 unplacedTasks={unplacedTasks}
                 assignments={assignments}

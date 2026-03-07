@@ -3,15 +3,25 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // subjects, teachers, assignments: 開発中は全許可（本番では認証チェックを追加すること）
+    // 認証済みユーザーのみ読み書き可（匿名認証含む）
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
     match /subjects/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated();
     }
     match /teachers/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated();
     }
     match /assignments/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated();
+    }
+    match /schedules/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+    match /scheduleEntries/{docId} {
+      allow read, write: if isAuthenticated();
     }
   }
 }
