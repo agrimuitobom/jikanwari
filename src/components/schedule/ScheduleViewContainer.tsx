@@ -8,6 +8,19 @@ import type { ViewMode } from './TimetableGrid'
 import { UnplacedSidebar } from './UnplacedSidebar'
 
 // ============================================================
+// スナップショット型
+// ============================================================
+
+interface ScheduleSnapshot {
+  id: number
+  name: string
+  entries: ScheduleEntry[]
+  unplacedTasks: UnplacedTask[]
+  result: SchedulerResult
+  createdAt: Date
+}
+
+// ============================================================
 // Props
 // ============================================================
 
@@ -136,6 +149,13 @@ export function ScheduleViewContainer({
   const [progress, setProgress] = useState<SchedulerProgress | null>(null)
   const [result, setResult] = useState<SchedulerResult | null>(null)
 
+  // ---- スナップショット ----
+  const [snapshots, setSnapshots] = useState<ScheduleSnapshot[]>([])
+  const [activeSnapshotId, setActiveSnapshotId] = useState<number | null>(null)
+  const [nextSnapshotId, setNextSnapshotId] = useState(1)
+  const [editingNameId, setEditingNameId] = useState<number | null>(null)
+  const [editingNameValue, setEditingNameValue] = useState('')
+
   // ---- スケジューラ実行 ----
   const handleGenerate = useCallback(async () => {
     if (assignments.length === 0) return
@@ -155,6 +175,45 @@ export function ScheduleViewContainer({
       setIsRunning(false)
     }
   }, [teachers, subjects, assignments])
+
+  // ---- スナップショット操作 ----
+  const handleSaveSnapshot = useCallback(() => {
+    if (!result) return
+    const id = nextSnapshotId
+    const snap: ScheduleSnapshot = {
+      id,
+      name: `案${id}`,
+      entries: [...entries],
+      unplacedTasks: [...unplacedTasks],
+      result: { ...result },
+      createdAt: new Date(),
+    }
+    setSnapshots((prev) => [...prev, snap])
+    setActiveSnapshotId(id)
+    setNextSnapshotId((n) => n + 1)
+  }, [result, entries, unplacedTasks, nextSnapshotId])
+
+  const handleRestoreSnapshot = useCallback((snapId: number) => {
+    const snap = snapshots.find((s) => s.id === snapId)
+    if (!snap) return
+    setEntries([...snap.entries])
+    setUnplacedTasks([...snap.unplacedTasks])
+    setResult({ ...snap.result })
+    setActiveSnapshotId(snapId)
+  }, [snapshots])
+
+  const handleDeleteSnapshot = useCallback((snapId: number) => {
+    setSnapshots((prev) => prev.filter((s) => s.id !== snapId))
+    if (activeSnapshotId === snapId) setActiveSnapshotId(null)
+  }, [activeSnapshotId])
+
+  const handleRenameSnapshot = useCallback((snapId: number, newName: string) => {
+    if (!newName.trim()) return
+    setSnapshots((prev) =>
+      prev.map((s) => (s.id === snapId ? { ...s, name: newName.trim() } : s)),
+    )
+    setEditingNameId(null)
+  }, [])
 
   // ---- DnD: 配置済みエントリの移動 ----
   const handleMoveEntry = useCallback(
@@ -367,9 +426,102 @@ export function ScheduleViewContainer({
             <span className="text-gray-400 text-xs">
               {result.entries.filter((e) => !e.isConsecutiveSecond).length} コマ配置
             </span>
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={handleSaveSnapshot}
+              className="btn-secondary text-xs"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+                <path d="M3.75 2A1.75 1.75 0 0 0 2 3.75v8.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 12.25v-5.5a.75.75 0 0 0-.22-.53l-4-4A.75.75 0 0 0 9.25 2H3.75Zm6.5 4a.75.75 0 0 1-.75-.75V3.56L11.94 6H10.25ZM5.75 9.5a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 0-1.5h-4.5Z" />
+              </svg>
+              この結果を保存
+            </button>
           </div>
         )}
       </div>
+
+      {/* スナップショット一覧 */}
+      {snapshots.length > 0 && (
+        <div className="card p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <h3 className="text-sm font-semibold text-gray-700">保存済みの時間割案</h3>
+            <span className="badge bg-gray-100 text-gray-600">{snapshots.length}件</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {snapshots.map((snap) => {
+              const isActive = activeSnapshotId === snap.id
+              return (
+                <div
+                  key={snap.id}
+                  className={[
+                    'group relative flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors',
+                    isActive
+                      ? 'border-primary-300 bg-primary-50 ring-1 ring-primary-200'
+                      : 'border-gray-200 bg-white hover:bg-gray-50',
+                  ].join(' ')}
+                >
+                  {/* 名前（ダブルクリックで編集） */}
+                  {editingNameId === snap.id ? (
+                    <input
+                      type="text"
+                      value={editingNameValue}
+                      onChange={(e) => setEditingNameValue(e.target.value)}
+                      onBlur={() => handleRenameSnapshot(snap.id, editingNameValue)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleRenameSnapshot(snap.id, editingNameValue)
+                        if (e.key === 'Escape') setEditingNameId(null)
+                      }}
+                      className="w-20 rounded border border-gray-300 px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary-400"
+                      autoFocus
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleRestoreSnapshot(snap.id)}
+                      onDoubleClick={() => {
+                        setEditingNameId(snap.id)
+                        setEditingNameValue(snap.name)
+                      }}
+                      className="font-medium text-gray-800"
+                      title="クリックで復元、ダブルクリックで名前変更"
+                    >
+                      {snap.name}
+                    </button>
+                  )}
+
+                  {/* スコア */}
+                  <span className={[
+                    'text-xs',
+                    snap.result.isComplete ? 'text-green-600' : 'text-yellow-600',
+                  ].join(' ')}>
+                    {snap.result.score}点
+                  </span>
+
+                  {/* 未配置数 */}
+                  {snap.unplacedTasks.length > 0 && (
+                    <span className="text-xs text-red-400">
+                      残{snap.unplacedTasks.length}
+                    </span>
+                  )}
+
+                  {/* 削除ボタン */}
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleDeleteSnapshot(snap.id) }}
+                    className="ml-1 rounded p-0.5 text-gray-300 hover:bg-red-50 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="削除"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+                      <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+                    </svg>
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* データ不足メッセージ */}
       {!hasData && (
