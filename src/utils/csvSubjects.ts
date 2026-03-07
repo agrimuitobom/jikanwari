@@ -8,7 +8,7 @@ import { SUBJECT_CATEGORIES } from './constants'
 const CSV_HEADER = '科目名,履修学年,教科,単位数,週あたりコマ数,連続授業,推奨時限開始,推奨時限終了,カラー'
 const CSV_EXAMPLE_ROWS = [
   '数学Ⅱ,2,数学,3,3,FALSE,,,#3b82f6',
-  '化学基礎,1,理科,2,2,FALSE,,,#10b981',
+  '化学基礎,1,理科,2,,,,,' ,
   '農業実習,2,農業,4,4,TRUE,3,6,#f59e0b',
 ]
 
@@ -107,21 +107,30 @@ export function parseCsv(text: string): ParseResult {
       continue
     }
 
-    // 単位数
-    const credits = Number(cols[3])
+    // 単位数 (required)
+    const creditsStr = cols[3]?.trim()
+    if (!creditsStr) {
+      errors.push(`${rowNum}行目: 単位数が空です`)
+      continue
+    }
+    const credits = Number(creditsStr)
     if (!Number.isInteger(credits) || credits < 1 || credits > 8) {
       errors.push(`${rowNum}行目: 単位数は1〜8の整数を指定してください（値: "${cols[3]}"）`)
       continue
     }
 
-    // 週あたりコマ数
-    const weeklyFrequency = Number(cols[4])
-    if (!Number.isInteger(weeklyFrequency) || weeklyFrequency < 1 || weeklyFrequency > 10) {
-      errors.push(`${rowNum}行目: 週あたりコマ数は1〜10の整数を指定してください（値: "${cols[4]}"）`)
-      continue
+    // 週あたりコマ数（任意、デフォルト＝単位数）
+    const freqStr = cols[4]?.trim()
+    let weeklyFrequency = credits
+    if (freqStr) {
+      weeklyFrequency = Number(freqStr)
+      if (!Number.isInteger(weeklyFrequency) || weeklyFrequency < 1 || weeklyFrequency > 10) {
+        errors.push(`${rowNum}行目: 週あたりコマ数は1〜10の整数を指定してください（値: "${cols[4]}"）`)
+        continue
+      }
     }
 
-    // 連続授業
+    // 連続授業（任意、デフォルト＝FALSE）
     const consecutiveStr = (cols[5] ?? '').toUpperCase()
     const isConsecutive = consecutiveStr === 'TRUE' || consecutiveStr === '1' || consecutiveStr === 'はい'
     if (isConsecutive && weeklyFrequency % 2 !== 0) {
@@ -143,7 +152,7 @@ export function parseCsv(text: string): ParseResult {
       preferredPeriods = { from, to }
     }
 
-    // カラー（任意）
+    // カラー（任意、デフォルト＝青）
     const color = cols[8]?.trim() || '#3b82f6'
 
     subjects.push({
