@@ -1,4 +1,4 @@
-import type { DayOfWeek, Period, Grade, ClassNumber } from '../types'
+import type { DayOfWeek, Period, Grade, ClassNumber, SubjectCategory } from '../types'
 
 export const DAYS: DayOfWeek[] = [
   'monday',
@@ -17,6 +17,27 @@ export const DAY_LABELS: Record<DayOfWeek, string> = {
 }
 
 export const PERIODS: Period[] = [1, 2, 3, 4, 5, 6]
+
+export const GRADES: Grade[] = [1, 2, 3]
+
+export const GRADE_LABELS: Record<Grade, string> = {
+  1: '1年',
+  2: '2年',
+  3: '3年',
+}
+
+export const SUBJECT_CATEGORIES: SubjectCategory[] = [
+  '国語',
+  '数学',
+  '理科',
+  '地歴公民',
+  '英語',
+  '芸術',
+  '家庭科',
+  '保健体育',
+  '農業',
+  '商業',
+]
 
 // ============================================================
 // 科目カラー定義（UI表示用プリセット）

@@ -11,6 +11,19 @@ export type Period = 1 | 2 | 3 | 4 | 5 | 6
 /** 学年 */
 export type Grade = 1 | 2 | 3
 
+/** 教科（大分類） */
+export type SubjectCategory =
+  | '国語'
+  | '数学'
+  | '理科'
+  | '地歴公民'
+  | '英語'
+  | '芸術'
+  | '家庭科'
+  | '保健体育'
+  | '農業'
+  | '商業'
+
 /** クラス番号（1〜3組） */
 export type ClassNumber = 1 | 2 | 3
 
@@ -79,6 +92,10 @@ export interface Teacher {
 export interface Subject {
   id: string
   name: string
+  /** 履修学年 */
+  grade: Grade
+  /** 教科（大分類） */
+  category: SubjectCategory
   /** 単位数 */
   credits: number
   /** 週あたりの授業コマ数（通常 credits と同値だが異なる場合もある） */
