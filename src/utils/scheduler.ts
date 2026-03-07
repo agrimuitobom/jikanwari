@@ -66,6 +66,9 @@ interface Slot {
   period: Period
 }
 
+/** 教員の1日あたり最大コマ数（ソフト制約） */
+const MAX_TEACHER_PERIODS_PER_DAY = 5
+
 /** 配置状態の管理 */
 interface BoardState {
   /** [day][period][classId] => assignmentId */
@@ -76,6 +79,10 @@ interface BoardState {
   entries: ScheduleEntry[]
   /** 各 assignment の残り配置コマ数 */
   remainingCounts: Map<string, number>
+  /** [day:classId:subjectId] => 配置数（同日同科目の重複検出用） */
+  classDaySubjectCount: Map<string, number>
+  /** [day:teacherId] => 配置コマ数（教員の日別負荷管理用） */
+  teacherDayCount: Map<string, number>
 }
 
 // ============================================================
@@ -102,6 +109,14 @@ function isSlotFreeForClass(state: BoardState, day: DayOfWeek, period: Period, c
 
 function isSlotFreeForTeacher(state: BoardState, day: DayOfWeek, period: Period, teacherId: string): boolean {
   return !state.teacherGrid.has(cellKey(day, period, teacherId))
+}
+
+function classDaySubjectKey(day: DayOfWeek, classId: string, subjectId: string): string {
+  return `${day}:${classId}:${subjectId}`
+}
+
+function teacherDayKey(day: DayOfWeek, teacherId: string): string {
+  return `${day}:${teacherId}`
 }
 
 /** 推奨時限に合致しているかチェック */
@@ -223,7 +238,7 @@ function canPlace(
 }
 
 /** 候補スロットをスコア順にソート（高スコア優先） */
-function scoreCandidateSlot(task: ScheduleTask, slot: Slot): number {
+function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState): number {
   let score = 0
 
   // 推奨時限に合致すれば加点
@@ -236,6 +251,25 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot): number {
       if (isInPreferredPeriod(task.subject, secondPeriod)) {
         score += 10
       }
+    }
+  }
+
+  // ソフト制約: 同日に同科目を同クラスに配置するのを避ける（連続授業を除く）
+  if (!task.isConsecutive) {
+    const cdsKey = classDaySubjectKey(slot.day, task.assignment.classId, task.subject.id)
+    const existingCount = state.classDaySubjectCount.get(cdsKey) ?? 0
+    if (existingCount > 0) {
+      score -= 15 * existingCount
+    }
+  }
+
+  // ソフト制約: 教員の1日あたりコマ数がMAXを超えそうなら減点
+  const slotsUsed = task.isConsecutive ? 2 : 1
+  for (const teacher of task.teachers) {
+    const tdKey = teacherDayKey(slot.day, teacher.id)
+    const currentLoad = state.teacherDayCount.get(tdKey) ?? 0
+    if (currentLoad + slotsUsed > MAX_TEACHER_PERIODS_PER_DAY) {
+      score -= 20
     }
   }
 
@@ -275,7 +309,14 @@ function placeTask(
     state.classGrid.set(cellKey(day, p, classId), task.assignment.id)
     for (const teacher of task.teachers) {
       state.teacherGrid.set(cellKey(day, p, teacher.id), task.assignment.id)
+      // 教員日別コマ数を加算
+      const tdKey = teacherDayKey(day, teacher.id)
+      state.teacherDayCount.set(tdKey, (state.teacherDayCount.get(tdKey) ?? 0) + 1)
     }
+
+    // 同日同科目カウントを加算
+    const cdsKey = classDaySubjectKey(day, classId, task.subject.id)
+    state.classDaySubjectCount.set(cdsKey, (state.classDaySubjectCount.get(cdsKey) ?? 0) + 1)
 
     state.entries.push(entry)
     newEntries.push(entry)
@@ -293,7 +334,25 @@ function removeEntries(
     state.classGrid.delete(cellKey(entry.day, entry.period, entry.classId))
     for (const teacher of task.teachers) {
       state.teacherGrid.delete(cellKey(entry.day, entry.period, teacher.id))
+      // 教員日別コマ数を減算
+      const tdKey = teacherDayKey(entry.day, teacher.id)
+      const current = state.teacherDayCount.get(tdKey) ?? 0
+      if (current <= 1) {
+        state.teacherDayCount.delete(tdKey)
+      } else {
+        state.teacherDayCount.set(tdKey, current - 1)
+      }
     }
+
+    // 同日同科目カウントを減算
+    const cdsKey = classDaySubjectKey(entry.day, entry.classId, task.subject.id)
+    const cdsCount = state.classDaySubjectCount.get(cdsKey) ?? 0
+    if (cdsCount <= 1) {
+      state.classDaySubjectCount.delete(cdsKey)
+    } else {
+      state.classDaySubjectCount.set(cdsKey, cdsCount - 1)
+    }
+
     const idx = state.entries.indexOf(entry)
     if (idx !== -1) state.entries.splice(idx, 1)
   }
@@ -309,6 +368,7 @@ function calculateScore(
   totalTasks: number,
   subjectMap: Map<string, Subject>,
   assignmentMap: Map<string, Assignment>,
+  teacherMap: Map<string, Teacher>,
 ): number {
   // 基本スコア: 配置率（1000点満点）
   const placedTasks = totalTasks - tasks.length
@@ -319,7 +379,7 @@ function calculateScore(
   let preferredTotal = 0
 
   for (const entry of entries) {
-    if (entry.isConsecutiveSecond) continue // ペアの1コマ目のみ評価
+    if (entry.isConsecutiveSecond) continue
     const assignment = assignmentMap.get(entry.assignmentId)
     if (!assignment) continue
     const subject = subjectMap.get(assignment.subjectId)
@@ -334,6 +394,42 @@ function calculateScore(
   if (preferredTotal > 0) {
     score += (preferredHits / preferredTotal) * 200
   }
+
+  // ソフト制約ペナルティ: 同日同科目の重複（最大 -100点）
+  const dayClassSubjectCounts = new Map<string, number>()
+  for (const entry of entries) {
+    if (entry.isConsecutiveSecond) continue
+    const assignment = assignmentMap.get(entry.assignmentId)
+    if (!assignment) continue
+    const subject = subjectMap.get(assignment.subjectId)
+    if (!subject || subject.isConsecutive) continue
+    const key = classDaySubjectKey(entry.day, entry.classId, subject.id)
+    dayClassSubjectCounts.set(key, (dayClassSubjectCounts.get(key) ?? 0) + 1)
+  }
+  let duplicates = 0
+  for (const count of dayClassSubjectCounts.values()) {
+    if (count > 1) duplicates += count - 1
+  }
+  score -= Math.min(duplicates * 15, 100)
+
+  // ソフト制約ペナルティ: 教員1日あたりの過剰コマ数（最大 -100点）
+  const teacherDayCounts = new Map<string, number>()
+  for (const entry of entries) {
+    const assignment = assignmentMap.get(entry.assignmentId)
+    if (!assignment) continue
+    for (const tid of assignment.teacherIds) {
+      if (!teacherMap.has(tid)) continue
+      const key = teacherDayKey(entry.day, tid)
+      teacherDayCounts.set(key, (teacherDayCounts.get(key) ?? 0) + 1)
+    }
+  }
+  let overload = 0
+  for (const count of teacherDayCounts.values()) {
+    if (count > MAX_TEACHER_PERIODS_PER_DAY) {
+      overload += count - MAX_TEACHER_PERIODS_PER_DAY
+    }
+  }
+  score -= Math.min(overload * 20, 100)
 
   return Math.round(score)
 }
@@ -454,6 +550,8 @@ export function* generateSchedule(
     teacherGrid: new Map(),
     entries: [],
     remainingCounts: new Map(),
+    classDaySubjectCount: new Map(),
+    teacherDayCount: new Map(),
   }
 
   // ベスト解の追跡
@@ -497,7 +595,7 @@ export function* generateSchedule(
 
     // 全タスク配置完了 → 解を記録
     if (frame.taskIndex >= totalTasks) {
-      const score = calculateScore(state.entries, [], totalTasks, subjectMap, assignmentMap)
+      const score = calculateScore(state.entries, [], totalTasks, subjectMap, assignmentMap, teacherMap)
       if (score > bestResult.score) {
         bestResult = {
           entries: [...state.entries],
@@ -517,7 +615,7 @@ export function* generateSchedule(
     if (candidateCache[frame.taskIndex] === null) {
       const raw = getCandidateSlots(task, state)
       // スコア順にソート
-      raw.sort((a, b) => scoreCandidateSlot(task, b) - scoreCandidateSlot(task, a))
+      raw.sort((a, b) => scoreCandidateSlot(task, b, state) - scoreCandidateSlot(task, a, state))
       candidateCache[frame.taskIndex] = raw
     }
     const candidates = candidateCache[frame.taskIndex]!
@@ -540,6 +638,7 @@ export function* generateSchedule(
         totalTasks,
         subjectMap,
         assignmentMap,
+        teacherMap,
       )
       if (partialScore > bestResult.score) {
         const unplaced = allTasks.slice(frame.taskIndex).map((t) =>

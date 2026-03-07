@@ -407,6 +407,62 @@ describe('scheduler', () => {
     })
   })
 
+  describe('ソフト制約: 同日同科目回避', () => {
+    it('同科目が異なる曜日に分散される', () => {
+      const teacher = makeTeacher()
+      const subject = makeSubject({ name: '数学', weeklyFrequency: 3 })
+      const assignment = makeAssignment({
+        subjectId: subject.id,
+        teacherIds: [teacher.id],
+        weeklyCount: 3,
+      })
+
+      const result = runGenerator([teacher], [subject], [assignment])
+      expect(result.isComplete).toBe(true)
+
+      // 3コマが全て異なる曜日に分散されていること
+      const days = result.entries.map((e) => e.day)
+      expect(new Set(days).size).toBe(3)
+    })
+  })
+
+  describe('ソフト制約: 教員1日あたりの最大コマ数', () => {
+    it('教員の1日のコマ数が5コマを超えるとスコアが下がる', () => {
+      // 月曜のみ勤務の教員に6コマ配置（5コマ上限のソフト制約超過）
+      const teacher = makeTeacher({
+        availableDays: ['monday'] as DayOfWeek[],
+      })
+      const subject = makeSubject({ weeklyFrequency: 6 })
+      const assignment = makeAssignment({
+        subjectId: subject.id,
+        teacherIds: [teacher.id],
+        weeklyCount: 6,
+      })
+
+      const result = runGenerator([teacher], [subject], [assignment])
+      expect(result.isComplete).toBe(true)
+      // 6コマ全て配置されるが、スコアは最大1000未満（1コマ超過のペナルティ）
+      expect(result.score).toBeLessThan(1000)
+    })
+
+    it('複数日に分散すれば高スコアになる', () => {
+      const teacher = makeTeacher({
+        availableDays: ['monday', 'tuesday', 'wednesday'] as DayOfWeek[],
+      })
+      const subject = makeSubject({ weeklyFrequency: 6 })
+      const assignment = makeAssignment({
+        subjectId: subject.id,
+        teacherIds: [teacher.id],
+        weeklyCount: 6,
+      })
+
+      const result = runGenerator([teacher], [subject], [assignment])
+      expect(result.isComplete).toBe(true)
+      // 分散可能なのでペナルティが軽いか0
+      expect(result.score).toBeGreaterThanOrEqual(900)
+    })
+  })
+
   describe('ジェネレータ進捗', () => {
     it('進捗情報がyieldされる', () => {
       const teacher = makeTeacher()
