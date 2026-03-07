@@ -24,8 +24,8 @@ export type SubjectCategory =
   | '農業'
   | '商業'
 
-/** クラス番号（1〜3組） */
-export type ClassNumber = 1 | 2 | 3
+/** クラス番号 */
+export type ClassNumber = number
 
 // ============================================================
 // 除外コマ（特定の曜日・時限の組み合わせ）

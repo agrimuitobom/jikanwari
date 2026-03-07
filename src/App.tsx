@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import type { Teacher, Subject, Assignment, CreateInput } from './types'
 
 import { useAuth } from './hooks/useAuth'
@@ -20,19 +20,29 @@ import { AssignmentForm } from './components/assignment/AssignmentForm'
 import { AssignmentBulkForm } from './components/assignment/AssignmentBulkForm'
 import { AssignmentList } from './components/assignment/AssignmentList'
 
-import { ScheduleViewContainer } from './components/schedule/ScheduleViewContainer'
+import { useSettings } from './hooks/useSettings'
+import { buildClassOptions } from './utils/constants'
+
+// 遅延ロード: 時間割ビューと設定パネル
+const ScheduleViewContainer = lazy(() =>
+  import('./components/schedule/ScheduleViewContainer').then((m) => ({ default: m.ScheduleViewContainer })),
+)
+const SettingsPanel = lazy(() =>
+  import('./components/settings/SettingsPanel').then((m) => ({ default: m.SettingsPanel })),
+)
 
 // ============================================================
 // タブ定義
 // ============================================================
 
-type Tab = 'schedule' | 'teachers' | 'subjects' | 'assignments'
+type Tab = 'schedule' | 'teachers' | 'subjects' | 'assignments' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'teachers', label: '教員管理' },
   { id: 'subjects', label: '科目管理' },
   { id: 'assignments', label: '授業割当' },
   { id: 'schedule', label: '時間割' },
+  { id: 'settings', label: '設定' },
 ]
 
 const VALID_TABS = new Set<string>(TABS.map((t) => t.id))
@@ -339,7 +349,7 @@ function AssignmentSection() {
 // 時間割セクション
 // ============================================================
 
-function ScheduleSection() {
+function ScheduleTab({ classOptions, settings }: { classOptions: import('./utils/constants').ClassOption[]; settings: import('./hooks/useSettings').AppSettings }) {
   const { teachers } = useTeachers()
   const { subjects } = useSubjects()
   const { assignments } = useAssignments()
@@ -349,6 +359,11 @@ function ScheduleSection() {
       teachers={teachers}
       subjects={subjects}
       assignments={assignments}
+      classOptions={classOptions}
+      schedulerOptions={{
+        maxTeacherPeriodsPerDay: settings.maxTeacherPeriodsPerDay,
+        maxIterations: settings.maxIterations,
+      }}
     />
   )
 }
@@ -360,6 +375,8 @@ function ScheduleSection() {
 function App() {
   const { loading: authLoading, error: authError } = useAuth()
   const { activeTab, navigate: setActiveTab } = useHashTab()
+  const { settings, updateSettings, resetSettings, DEFAULT_SETTINGS } = useSettings()
+  const classOptions = buildClassOptions(settings.classesPerGrade)
 
   if (authLoading) {
     return <LoadingSpinner message="認証中..." />
@@ -384,16 +401,19 @@ function App() {
       </header>
 
       {/* タブナビゲーション */}
-      <nav className="border-b border-gray-200 bg-white shadow-sm">
-        <div className="mx-auto max-w-7xl px-4">
-          <div className="flex space-x-1">
+      <nav className="border-b border-gray-200 bg-white shadow-sm" aria-label="メインナビゲーション">
+        <div className="mx-auto max-w-7xl px-2 sm:px-4 overflow-x-auto">
+          <div className="flex space-x-1" role="tablist">
             {TABS.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`panel-${tab.id}`}
                 onClick={() => setActiveTab(tab.id)}
                 className={[
-                  'px-4 py-3.5 text-sm font-medium transition-colors border-b-2',
+                  'px-4 py-3.5 text-sm font-medium transition-colors border-b-2 focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus:outline-none',
                   activeTab === tab.id
                     ? 'border-primary-600 text-primary-600'
                     : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700',
@@ -407,11 +427,25 @@ function App() {
       </nav>
 
       {/* メインコンテンツ */}
-      <main className="mx-auto max-w-7xl px-4 py-8">
+      <main className="mx-auto max-w-7xl px-2 sm:px-4 py-4 sm:py-8" id={`panel-${activeTab}`} role="tabpanel" aria-label={TABS.find(t => t.id === activeTab)?.label}>
         {activeTab === 'teachers' && <TeacherSection />}
         {activeTab === 'subjects' && <SubjectSection />}
         {activeTab === 'assignments' && <AssignmentSection />}
-        {activeTab === 'schedule' && <ScheduleSection />}
+        {activeTab === 'schedule' && (
+          <Suspense fallback={<LoadingSpinner message="時間割モジュールを読み込み中..." />}>
+            <ScheduleTab classOptions={classOptions} settings={settings} />
+          </Suspense>
+        )}
+        {activeTab === 'settings' && (
+          <Suspense fallback={<LoadingSpinner message="読み込み中..." size="sm" />}>
+            <SettingsPanel
+              settings={settings}
+              defaults={DEFAULT_SETTINGS}
+              onUpdate={updateSettings}
+              onReset={resetSettings}
+            />
+          </Suspense>
+        )}
       </main>
     </div>
   )

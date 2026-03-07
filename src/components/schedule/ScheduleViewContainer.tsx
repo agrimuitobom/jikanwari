@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef } from 'react'
 import type { DayOfWeek, Period, Teacher, Subject, Assignment, ScheduleEntry, TimeSlot } from '../../types'
 import { CLASS_OPTIONS } from '../../utils/constants'
+import type { ClassOption } from '../../utils/constants'
 import { runSchedulerInWorker } from '../../utils/runSchedulerWorker'
-import type { SchedulerProgress, SchedulerResult, UnplacedTask } from '../../utils/scheduler'
+import type { SchedulerProgress, SchedulerResult, UnplacedTask, SchedulerOptions } from '../../utils/scheduler'
 import { useSchedules } from '../../hooks/useSchedules'
 import { ErrorAlert } from '../common/ErrorAlert'
 import { TimetableGrid } from './TimetableGrid'
@@ -17,6 +18,8 @@ export interface ScheduleViewContainerProps {
   teachers: Teacher[]
   subjects: Subject[]
   assignments: Assignment[]
+  classOptions?: ClassOption[]
+  schedulerOptions?: SchedulerOptions
 }
 
 // ============================================================
@@ -126,11 +129,13 @@ export function ScheduleViewContainer({
   teachers,
   subjects,
   assignments,
+  classOptions = CLASS_OPTIONS,
+  schedulerOptions,
 }: ScheduleViewContainerProps) {
   // ---- State ----
   const [viewMode, setViewMode] = useState<ViewMode>('class')
   const [selectedTargetId, setSelectedTargetId] = useState<string>(
-    CLASS_OPTIONS[0]?.id ?? '',
+    classOptions[0]?.id ?? '',
   )
   const [entries, setEntries] = useState<ScheduleEntry[]>([])
   const [unplacedTasks, setUnplacedTasks] = useState<UnplacedTask[]>([])
@@ -190,14 +195,14 @@ export function ScheduleViewContainer({
     try {
       const res = await runSchedulerInWorker(teachers, subjects, assignments, (p) => {
         setProgress(p)
-      })
+      }, schedulerOptions)
       setEntries(res.entries)
       setUnplacedTasks(res.unplacedTasks)
       setResult(res)
     } finally {
       setIsRunning(false)
     }
-  }, [teachers, subjects, assignments])
+  }, [teachers, subjects, assignments, schedulerOptions])
 
   // ---- Firestoreに保存 ----
   const handleSaveToFirestore = useCallback(async () => {
@@ -314,7 +319,7 @@ export function ScheduleViewContainer({
   const handleViewModeChange = (mode: ViewMode) => {
     setViewMode(mode)
     if (mode === 'class') {
-      setSelectedTargetId(CLASS_OPTIONS[0]?.id ?? '')
+      setSelectedTargetId(classOptions[0]?.id ?? '')
     } else {
       setSelectedTargetId(teachers[0]?.id ?? '')
     }
@@ -330,8 +335,8 @@ export function ScheduleViewContainer({
       )}
 
       {/* ツールバー */}
-      <div className="card p-4">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="card p-3 sm:p-4">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {/* 自動生成ボタン */}
           <button
             type="button"
@@ -361,10 +366,11 @@ export function ScheduleViewContainer({
           <div className="h-8 w-px bg-gray-200" />
 
           {/* ビューモード切替 */}
-          <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+          <div className="flex rounded-lg border border-gray-300 overflow-hidden" role="group" aria-label="表示モード切替">
             <button
               type="button"
               onClick={() => handleViewModeChange('class')}
+              aria-pressed={viewMode === 'class'}
               className={[
                 'px-3 py-1.5 text-xs font-medium transition-colors',
                 viewMode === 'class'
@@ -377,6 +383,7 @@ export function ScheduleViewContainer({
             <button
               type="button"
               onClick={() => handleViewModeChange('teacher')}
+              aria-pressed={viewMode === 'teacher'}
               className={[
                 'px-3 py-1.5 text-xs font-medium transition-colors border-l border-gray-300',
                 viewMode === 'teacher'
@@ -393,9 +400,10 @@ export function ScheduleViewContainer({
             value={selectedTargetId}
             onChange={(e) => setSelectedTargetId(e.target.value)}
             className="form-select w-auto text-sm"
+            aria-label={viewMode === 'class' ? 'クラス選択' : '教員選択'}
           >
             {viewMode === 'class'
-              ? CLASS_OPTIONS.map((c) => (
+              ? classOptions.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.displayName}
                   </option>
@@ -445,14 +453,14 @@ export function ScheduleViewContainer({
 
         {/* 進捗バー */}
         {isRunning && progress && (
-          <div className="mt-3">
+          <div className="mt-3" role="status" aria-live="polite" aria-label="生成進捗">
             <div className="flex justify-between text-xs text-gray-500 mb-1">
               <span>
                 配置中: {progress.placed} / {progress.total}
               </span>
               <span>探索: {progress.iterations.toLocaleString()} 回</span>
             </div>
-            <div className="h-1.5 w-full rounded-full bg-gray-200">
+            <div className="h-1.5 w-full rounded-full bg-gray-200" role="progressbar" aria-valuenow={progress.placed} aria-valuemin={0} aria-valuemax={progress.total}>
               <div
                 className="h-1.5 rounded-full bg-primary-500 transition-all duration-300"
                 style={{
@@ -465,7 +473,7 @@ export function ScheduleViewContainer({
 
         {/* 結果サマリー */}
         {result && !isRunning && (
-          <div className="mt-3 flex items-center gap-3 text-sm">
+          <div className="mt-3 flex items-center gap-3 text-sm" role="status" aria-live="polite">
             <span
               className={[
                 'badge',
@@ -605,9 +613,9 @@ export function ScheduleViewContainer({
 
       {/* メイングリッド + サイドバー */}
       {entries.length > 0 && (
-        <div className="flex gap-4">
+        <div className="flex flex-col lg:flex-row gap-4">
           {/* グリッド */}
-          <div className="flex-1 card p-4 print:shadow-none print:border-none">
+          <div className="flex-1 min-w-0 card p-2 sm:p-4 print:shadow-none print:border-none">
             <TimetableGrid
               entries={entries}
               teachers={teachers}
@@ -622,7 +630,7 @@ export function ScheduleViewContainer({
 
           {/* 未配置サイドバー */}
           {unplacedTasks.length > 0 && (
-            <div className="w-64 shrink-0 print:hidden">
+            <div className="w-full lg:w-64 lg:shrink-0 print:hidden">
               <UnplacedSidebar
                 unplacedTasks={unplacedTasks}
                 assignments={assignments}

@@ -111,8 +111,8 @@ export function AssignmentBulkForm({
 
       <div className="space-y-3">
         {rows.map((row, idx) => (
-          <div key={idx} className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white p-3">
-            <div className="grid flex-1 grid-cols-4 gap-2">
+          <div key={idx} className="flex flex-col sm:flex-row items-start gap-2 rounded-lg border border-gray-200 bg-white p-3">
+            <div className="grid flex-1 w-full grid-cols-2 sm:grid-cols-4 gap-2">
               {/* クラス */}
               <select
                 value={row.classId}

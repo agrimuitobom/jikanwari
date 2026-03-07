@@ -66,8 +66,14 @@ interface Slot {
   period: Period
 }
 
-/** 教員の1日あたり最大コマ数（ソフト制約） */
-const MAX_TEACHER_PERIODS_PER_DAY = 5
+/** 教員の1日あたり最大コマ数（ソフト制約）のデフォルト値 */
+const DEFAULT_MAX_TEACHER_PERIODS_PER_DAY = 5
+
+/** スケジューラのオプション設定 */
+export interface SchedulerOptions {
+  maxTeacherPeriodsPerDay?: number
+  maxIterations?: number
+}
 
 /** 配置状態の管理 */
 interface BoardState {
@@ -238,7 +244,7 @@ function canPlace(
 }
 
 /** 候補スロットをスコア順にソート（高スコア優先） */
-function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState): number {
+function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, maxTeacherPerDay: number): number {
   let score = 0
 
   // 推奨時限に合致すれば加点
@@ -268,7 +274,7 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState): 
   for (const teacher of task.teachers) {
     const tdKey = teacherDayKey(slot.day, teacher.id)
     const currentLoad = state.teacherDayCount.get(tdKey) ?? 0
-    if (currentLoad + slotsUsed > MAX_TEACHER_PERIODS_PER_DAY) {
+    if (currentLoad + slotsUsed > maxTeacherPerDay) {
       score -= 20
     }
   }
@@ -369,6 +375,7 @@ function calculateScore(
   subjectMap: Map<string, Subject>,
   assignmentMap: Map<string, Assignment>,
   teacherMap: Map<string, Teacher>,
+  maxTeacherPerDay: number,
 ): number {
   // 基本スコア: 配置率（1000点満点）
   const placedTasks = totalTasks - tasks.length
@@ -425,8 +432,8 @@ function calculateScore(
   }
   let overload = 0
   for (const count of teacherDayCounts.values()) {
-    if (count > MAX_TEACHER_PERIODS_PER_DAY) {
-      overload += count - MAX_TEACHER_PERIODS_PER_DAY
+    if (count > maxTeacherPerDay) {
+      overload += count - maxTeacherPerDay
     }
   }
   score -= Math.min(overload * 20, 100)
@@ -525,7 +532,10 @@ export function* generateSchedule(
   teachers: Teacher[],
   subjects: Subject[],
   assignments: Assignment[],
+  options?: SchedulerOptions,
 ): Generator<SchedulerProgress, SchedulerResult, undefined> {
+  const maxTeacherPerDay = options?.maxTeacherPeriodsPerDay ?? DEFAULT_MAX_TEACHER_PERIODS_PER_DAY
+  const maxIter = options?.maxIterations ?? 100_000
   // マップ構築
   const teacherMap = new Map(teachers.map((t) => [t.id, t]))
   const subjectMap = new Map(subjects.map((s) => [s.id, s]))
@@ -562,7 +572,6 @@ export function* generateSchedule(
     unplacedTasks: [],
   }
   let iterations = 0
-  const MAX_ITERATIONS = 100_000
 
   // 再帰バックトラッキング（スタックベース + yield対応のためイテレータ化）
   type StackFrame = {
@@ -579,7 +588,7 @@ export function* generateSchedule(
     iterations++
 
     // 反復上限チェック
-    if (iterations >= MAX_ITERATIONS) break
+    if (iterations >= maxIter) break
 
     // 進捗を定期的に yield
     if (iterations % 500 === 0) {
@@ -595,7 +604,7 @@ export function* generateSchedule(
 
     // 全タスク配置完了 → 解を記録
     if (frame.taskIndex >= totalTasks) {
-      const score = calculateScore(state.entries, [], totalTasks, subjectMap, assignmentMap, teacherMap)
+      const score = calculateScore(state.entries, [], totalTasks, subjectMap, assignmentMap, teacherMap, maxTeacherPerDay)
       if (score > bestResult.score) {
         bestResult = {
           entries: [...state.entries],
@@ -615,7 +624,7 @@ export function* generateSchedule(
     if (candidateCache[frame.taskIndex] === null) {
       const raw = getCandidateSlots(task, state)
       // スコア順にソート
-      raw.sort((a, b) => scoreCandidateSlot(task, b, state) - scoreCandidateSlot(task, a, state))
+      raw.sort((a, b) => scoreCandidateSlot(task, b, state, maxTeacherPerDay) - scoreCandidateSlot(task, a, state, maxTeacherPerDay))
       candidateCache[frame.taskIndex] = raw
     }
     const candidates = candidateCache[frame.taskIndex]!
@@ -639,6 +648,7 @@ export function* generateSchedule(
         subjectMap,
         assignmentMap,
         teacherMap,
+        maxTeacherPerDay,
       )
       if (partialScore > bestResult.score) {
         const unplaced = allTasks.slice(frame.taskIndex).map((t) =>
