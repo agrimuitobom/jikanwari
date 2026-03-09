@@ -112,6 +112,8 @@ export interface Subject {
   preferredPeriods?: PreferredPeriodRange
   /** 科目カラー（UI表示用 HEX or Tailwind color name） */
   color?: string
+  /** 配置不可時限（この時限には絶対に配置しない） */
+  excludedPeriods?: Period[]
   createdAt: Date
   updatedAt: Date
 }
