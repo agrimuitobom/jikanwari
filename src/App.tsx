@@ -382,16 +382,15 @@ function App() {
     return <LoadingSpinner message="認証中..." />
   }
 
-  if (authError) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <ErrorAlert message={`認証エラー: ${authError.message}`} />
-      </div>
-    )
-  }
-
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* 認証エラー時は警告バナー（アプリ自体はブロックしない） */}
+      {authError && (
+        <div className="bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-sm text-yellow-800">
+          認証に失敗しました（Firestore への保存が制限される場合があります）。Firebase コンソールで匿名認証を有効にしてください。
+        </div>
+      )}
+
       {/* ヘッダー */}
       <header className="bg-primary-700 text-white shadow-md">
         <div className="mx-auto max-w-7xl px-4 py-4">
