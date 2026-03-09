@@ -3,10 +3,9 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 認証済みユーザーを優先するが、未認証でもアクセスを許可
-    // 本番運用時は isAuthenticated() に戻すこと
+    // 認証済みユーザーのみ読み書き可（匿名認証含む）
     function isAuthenticated() {
-      return true;
+      return request.auth != null;
     }
 
     match /subjects/{docId} {
