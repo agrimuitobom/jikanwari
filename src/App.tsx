@@ -80,6 +80,11 @@ function TeacherSection() {
 
   const [editTarget, setEditTarget] = useState<Teacher | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [filterSubjectId, setFilterSubjectId] = useState<string>('')
+
+  const filteredTeachers = filterSubjectId
+    ? teachers.filter((t) => t.subjectIds.includes(filterSubjectId))
+    : teachers
 
   const openCreate = () => {
     setEditTarget(null)
@@ -120,7 +125,24 @@ function TeacherSection() {
         </div>
       ) : (
         <>
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <select
+                value={filterSubjectId}
+                onChange={(e) => setFilterSubjectId(e.target.value)}
+                className="input py-2 text-sm min-w-[160px]"
+              >
+                <option value="">すべての教科</option>
+                {subjects.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+              {filterSubjectId && (
+                <span className="text-xs text-gray-500">
+                  {filteredTeachers.length}件
+                </span>
+              )}
+            </div>
             <button type="button" onClick={openCreate} className="btn-primary">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
                 <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
@@ -129,7 +151,7 @@ function TeacherSection() {
             </button>
           </div>
           <TeacherList
-            teachers={teachers}
+            teachers={filteredTeachers}
             subjects={subjects}
             onEdit={openEdit}
             onDelete={deleteTeacher}
