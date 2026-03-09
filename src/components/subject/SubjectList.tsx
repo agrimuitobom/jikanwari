@@ -21,10 +21,13 @@ export function SubjectList({ subjects, onEdit, onDelete }: SubjectListProps) {
     if (filterCategory !== 'all') {
       result = result.filter((s) => s.category === filterCategory)
     }
-    // Sort by grade, then category, then name
+    // Sort by category (SUBJECT_CATEGORIES order), then grade, then name
+    const categoryOrder = new Map(SUBJECT_CATEGORIES.map((c, i) => [c, i]))
     return result.sort((a, b) => {
+      const catA = categoryOrder.get(a.category) ?? 99
+      const catB = categoryOrder.get(b.category) ?? 99
+      if (catA !== catB) return catA - catB
       if (a.grade !== b.grade) return a.grade - b.grade
-      if (a.category !== b.category) return a.category.localeCompare(b.category)
       return a.name.localeCompare(b.name)
     })
   }, [subjects, filterGrade, filterCategory])
