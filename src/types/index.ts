@@ -66,6 +66,8 @@ export interface PreferredPeriodRange {
 export interface Teacher {
   id: string
   name: string
+  /** 所属教科（大分類） */
+  department?: SubjectCategory
   /** 担当可能な科目IDの配列 */
   subjectIds: string[]
   /** 勤務可能な曜日 */

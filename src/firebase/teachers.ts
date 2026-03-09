@@ -58,6 +58,7 @@ function docToTeacher(snap: QueryDocumentSnapshot): Teacher {
   return {
     id: snap.id,
     name: d.name as string,
+    ...(d.department !== undefined ? { department: d.department as Teacher['department'] } : {}),
     subjectIds: (d.subjectIds ?? []) as string[],
     availableDays: (d.availableDays ?? []) as Teacher['availableDays'],
     excludedSlots: (d.excludedSlots ?? []) as Teacher['excludedSlots'],
@@ -97,6 +98,7 @@ export async function addTeacher(input: CreateInput<Teacher>): Promise<Teacher> 
 
   const docRef = await addDoc(teachersRef, {
     name: input.name,
+    ...(input.department !== undefined ? { department: input.department } : {}),
     subjectIds: input.subjectIds,
     availableDays: input.availableDays,
     // excludedSlots は {day, period} のオブジェクト配列として保存
