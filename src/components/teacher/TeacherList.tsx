@@ -56,10 +56,17 @@ export function TeacherList({ teachers, subjects, onEdit, onDelete }: TeacherLis
 
         return (
           <div key={teacher.id} className="card flex flex-col gap-4 p-5">
-            {/* 名前 */}
+            {/* 名前・教科 */}
             <div className="flex items-start justify-between gap-2">
               <div>
-                <p className="text-base font-semibold text-gray-900">{teacher.name}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-base font-semibold text-gray-900">{teacher.name}</p>
+                  {teacher.department && (
+                    <span className="badge bg-gray-100 text-gray-600 text-xs">
+                      {teacher.department}
+                    </span>
+                  )}
+                </div>
                 {teacher.memo && (
                   <p className="mt-0.5 line-clamp-1 text-xs text-gray-400">{teacher.memo}</p>
                 )}

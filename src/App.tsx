@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
-import type { Teacher, Subject, Assignment, CreateInput } from './types'
+import type { Teacher, Subject, SubjectCategory, Assignment, CreateInput } from './types'
 
 import { useAuth } from './hooks/useAuth'
 import { useTeachers } from './hooks/useTeachers'
@@ -21,7 +21,7 @@ import { AssignmentBulkForm } from './components/assignment/AssignmentBulkForm'
 import { AssignmentList } from './components/assignment/AssignmentList'
 
 import { useSettings } from './hooks/useSettings'
-import { buildClassOptions } from './utils/constants'
+import { buildClassOptions, SUBJECT_CATEGORIES } from './utils/constants'
 
 // 遅延ロード: 時間割ビューと設定パネル
 const ScheduleViewContainer = lazy(() =>
@@ -80,10 +80,10 @@ function TeacherSection() {
 
   const [editTarget, setEditTarget] = useState<Teacher | null>(null)
   const [showForm, setShowForm] = useState(false)
-  const [filterSubjectId, setFilterSubjectId] = useState<string>('')
+  const [filterDepartment, setFilterDepartment] = useState<SubjectCategory | ''>('')
 
-  const filteredTeachers = filterSubjectId
-    ? teachers.filter((t) => t.subjectIds.includes(filterSubjectId))
+  const filteredTeachers = filterDepartment
+    ? teachers.filter((t) => t.department === filterDepartment)
     : teachers
 
   const openCreate = () => {
@@ -128,16 +128,16 @@ function TeacherSection() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <select
-                value={filterSubjectId}
-                onChange={(e) => setFilterSubjectId(e.target.value)}
+                value={filterDepartment}
+                onChange={(e) => setFilterDepartment(e.target.value as SubjectCategory | '')}
                 className="input py-2 text-sm min-w-[160px]"
               >
                 <option value="">すべての教科</option>
-                {subjects.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
+                {SUBJECT_CATEGORIES.map((cat) => (
+                  <option key={cat} value={cat}>{cat}</option>
                 ))}
               </select>
-              {filterSubjectId && (
+              {filterDepartment && (
                 <span className="text-xs text-gray-500">
                   {filteredTeachers.length}件
                 </span>

@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import type { Teacher, Subject, CreateInput, DayOfWeek, Period, TimeSlot } from '../../types'
+import type { Teacher, Subject, SubjectCategory, CreateInput, DayOfWeek, Period, TimeSlot } from '../../types'
 import { ErrorAlert } from '../common/ErrorAlert'
-import { DAYS, DAY_LABELS, PERIODS } from '../../utils/constants'
+import { DAYS, DAY_LABELS, PERIODS, SUBJECT_CATEGORIES } from '../../utils/constants'
 
 // ============================================================
 // 型
@@ -9,6 +9,7 @@ import { DAYS, DAY_LABELS, PERIODS } from '../../utils/constants'
 
 interface FormState {
   name: string
+  department: SubjectCategory | ''
   subjectIds: string[]
   availableDays: DayOfWeek[]
   excludedSlots: TimeSlot[]
@@ -128,6 +129,7 @@ export function TeacherForm({ initialValues, subjects, onSubmit, onCancel }: Tea
 
   const [form, setForm] = useState<FormState>({
     name: initialValues?.name ?? '',
+    department: initialValues?.department ?? '',
     subjectIds: initialValues?.subjectIds ?? [],
     availableDays: initialValues?.availableDays ?? [
       'monday',
@@ -184,6 +186,7 @@ export function TeacherForm({ initialValues, subjects, onSubmit, onCancel }: Tea
     try {
       await onSubmit({
         name: form.name.trim(),
+        ...(form.department ? { department: form.department } : {}),
         subjectIds: form.subjectIds,
         availableDays: form.availableDays,
         excludedSlots: form.excludedSlots,
@@ -225,6 +228,22 @@ export function TeacherForm({ initialValues, subjects, onSubmit, onCancel }: Tea
             placeholder="例：山田 太郎"
             required
           />
+        </div>
+        <div>
+          <label htmlFor="teacher-department" className="form-label">
+            所属教科
+          </label>
+          <select
+            id="teacher-department"
+            value={form.department}
+            onChange={(e) => setForm((p) => ({ ...p, department: e.target.value as SubjectCategory | '' }))}
+            className="form-input"
+          >
+            <option value="">未設定</option>
+            {SUBJECT_CATEGORIES.map((cat) => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
         </div>
         <div>
           <label htmlFor="teacher-memo" className="form-label">
