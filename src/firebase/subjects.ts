@@ -87,6 +87,9 @@ function docToSubject(snap: QueryDocumentSnapshot): Subject {
       ? { preferredPeriods: d.preferredPeriods as Subject['preferredPeriods'] }
       : {}),
     ...(d.color !== undefined ? { color: d.color as string } : {}),
+    ...(Array.isArray(d.excludedPeriods) && d.excludedPeriods.length > 0
+      ? { excludedPeriods: d.excludedPeriods as Subject['excludedPeriods'] }
+      : {}),
     createdAt: (d.createdAt as Timestamp).toDate(),
     updatedAt: (d.updatedAt as Timestamp).toDate(),
   }
@@ -117,6 +120,9 @@ export async function addSubject(input: CreateInput<Subject>): Promise<Subject> 
     // preferredPeriods が undefined の場合はフィールド自体を省略
     ...(input.preferredPeriods !== undefined ? { preferredPeriods: input.preferredPeriods } : {}),
     ...(input.color !== undefined ? { color: input.color } : {}),
+    ...(input.excludedPeriods !== undefined && input.excludedPeriods.length > 0
+      ? { excludedPeriods: input.excludedPeriods }
+      : {}),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   })

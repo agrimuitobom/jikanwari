@@ -163,6 +163,11 @@ export function SubjectList({ subjects, onEdit, onDelete }: SubjectListProps) {
                       {subject.preferredPeriods.from}〜{subject.preferredPeriods.to}限推奨
                     </span>
                   )}
+                  {subject.excludedPeriods && subject.excludedPeriods.length > 0 && (
+                    <span className="badge border border-red-200 bg-red-50 text-red-700">
+                      {subject.excludedPeriods.join('・')}限不可
+                    </span>
+                  )}
                 </div>
 
                 {/* 削除確認 */}

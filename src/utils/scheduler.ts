@@ -131,6 +131,12 @@ function isInPreferredPeriod(subject: Subject, period: Period): boolean {
   return period >= subject.preferredPeriods.from && period <= subject.preferredPeriods.to
 }
 
+/** 科目の配置不可時限かチェック（ハード制約） */
+function isExcludedPeriodForSubject(subject: Subject, period: Period): boolean {
+  if (!subject.excludedPeriods || subject.excludedPeriods.length === 0) return false
+  return subject.excludedPeriods.includes(period)
+}
+
 // ============================================================
 // タスク生成・優先度計算
 // ============================================================
@@ -174,6 +180,11 @@ function buildTasks(
       if (subject.preferredPeriods) {
         const range = subject.preferredPeriods.to - subject.preferredPeriods.from + 1
         priority -= (6 - range) * 5
+      }
+
+      // excludedPeriods があると使える枠が減る
+      if (subject.excludedPeriods && subject.excludedPeriods.length > 0) {
+        priority -= subject.excludedPeriods.length * 5
       }
 
       tasks.push({
@@ -230,6 +241,9 @@ function canPlace(
   period: Period,
 ): boolean {
   const classId = task.assignment.classId
+
+  // 科目の配置不可時限チェック
+  if (isExcludedPeriodForSubject(task.subject, period)) return false
 
   // クラス重複チェック
   if (!isSlotFreeForClass(state, day, period, classId)) return false

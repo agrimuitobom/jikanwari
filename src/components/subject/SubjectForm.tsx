@@ -13,6 +13,7 @@ interface FormState {
   usePreferred: boolean
   preferredFrom: Period
   preferredTo: Period
+  excludedPeriods: Period[]
   color: string
 }
 
@@ -68,6 +69,7 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
     usePreferred: !!initialValues?.preferredPeriods,
     preferredFrom: initialValues?.preferredPeriods?.from ?? 1,
     preferredTo: initialValues?.preferredPeriods?.to ?? 4,
+    excludedPeriods: initialValues?.excludedPeriods ?? [],
     color: initialValues?.color ?? SUBJECT_COLORS[0].value,
   })
   const [submitting, setSubmitting] = useState(false)
@@ -110,6 +112,9 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
         isConsecutive: form.isConsecutive,
         ...(form.usePreferred
           ? { preferredPeriods: { from: form.preferredFrom, to: form.preferredTo } }
+          : {}),
+        ...(form.excludedPeriods.length > 0
+          ? { excludedPeriods: [...form.excludedPeriods].sort((a, b) => a - b) }
           : {}),
         color: form.color,
       })
@@ -275,6 +280,55 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
               </select>
               <span className="text-xs text-gray-400">に優先配置</span>
             </div>
+          )}
+        </div>
+
+        {/* 配置不可時限 */}
+        <div>
+          <p className="mb-2 text-sm font-medium text-gray-700">
+            配置不可時限
+          </p>
+          <p className="mb-3 text-xs text-gray-400">
+            この科目を配置しない時限を選択（例: 体育を1限・5限に入れない）
+          </p>
+          <div className="flex gap-2">
+            {PERIODS.map((p) => {
+              const excluded = form.excludedPeriods.includes(p)
+              return (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() =>
+                    setForm((prev) => ({
+                      ...prev,
+                      excludedPeriods: excluded
+                        ? prev.excludedPeriods.filter((ep) => ep !== p)
+                        : [...prev.excludedPeriods, p],
+                    }))
+                  }
+                  className={[
+                    'flex h-10 w-12 items-center justify-center rounded-lg text-sm font-bold transition-all',
+                    excluded
+                      ? 'border-2 border-red-300 bg-red-100 text-red-600'
+                      : 'border border-gray-200 bg-white text-gray-400 hover:border-gray-300 hover:bg-gray-50',
+                  ].join(' ')}
+                >
+                  {p}限
+                </button>
+              )
+            })}
+          </div>
+          {form.excludedPeriods.length > 0 && (
+            <p className="mt-2 text-xs text-red-500">
+              {form.excludedPeriods.sort((a, b) => a - b).join('・')}限を配置不可に設定中
+              <button
+                type="button"
+                onClick={() => setForm((p) => ({ ...p, excludedPeriods: [] }))}
+                className="ml-2 underline hover:text-red-700"
+              >
+                クリア
+              </button>
+            </p>
           )}
         </div>
       </section>
