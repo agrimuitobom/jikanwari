@@ -11,6 +11,7 @@ import { ErrorAlert } from './components/common/ErrorAlert'
 
 import { TeacherForm } from './components/teacher/TeacherForm'
 import { TeacherList } from './components/teacher/TeacherList'
+import { TeacherCsvImport } from './components/teacher/TeacherCsvImport'
 
 import { SubjectForm } from './components/subject/SubjectForm'
 import { SubjectList } from './components/subject/SubjectList'
@@ -80,6 +81,7 @@ function TeacherSection() {
 
   const [editTarget, setEditTarget] = useState<Teacher | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [showCsvImport, setShowCsvImport] = useState(false)
   const [filterDepartment, setFilterDepartment] = useState<SubjectCategory | ''>('')
 
   const filteredTeachers = filterDepartment
@@ -89,13 +91,16 @@ function TeacherSection() {
   const openCreate = () => {
     setEditTarget(null)
     setShowForm(true)
+    setShowCsvImport(false)
   }
   const openEdit = (t: Teacher) => {
     setEditTarget(t)
     setShowForm(true)
+    setShowCsvImport(false)
   }
   const closeForm = () => {
     setShowForm(false)
+    setShowCsvImport(false)
     setEditTarget(null)
   }
 
@@ -108,13 +113,21 @@ function TeacherSection() {
     closeForm()
   }
 
+  const handleCsvImport = async (items: CreateInput<Teacher>[]) => {
+    for (const t of items) {
+      await addTeacher(t)
+    }
+  }
+
   if (loading) return <LoadingSpinner message="教員データを読み込み中..." />
 
   return (
     <div className="space-y-4">
       {error && <ErrorAlert message={error.message} onDismiss={clearError} />}
 
-      {showForm ? (
+      {showCsvImport ? (
+        <TeacherCsvImport onImport={handleCsvImport} onClose={closeForm} />
+      ) : showForm ? (
         <div className="card p-6 sm:p-8">
           <TeacherForm
             initialValues={editTarget ?? undefined}
@@ -143,12 +156,25 @@ function TeacherSection() {
                 </span>
               )}
             </div>
-            <button type="button" onClick={openCreate} className="btn-primary">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
-                <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
-              </svg>
-              教員を追加
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setShowCsvImport(true); setShowForm(false) }}
+                className="btn-secondary"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                  <path d="M7.25 10.25a.75.75 0 0 0 1.5 0V4.56l1.97 1.97a.75.75 0 1 0 1.06-1.06l-3.25-3.25a.75.75 0 0 0-1.06 0L4.22 5.47a.75.75 0 0 0 1.06 1.06l1.97-1.97v5.69Z" />
+                  <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
+                </svg>
+                CSV一括登録
+              </button>
+              <button type="button" onClick={openCreate} className="btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                  <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
+                </svg>
+                教員を追加
+              </button>
+            </div>
           </div>
           <TeacherList
             teachers={filteredTeachers}

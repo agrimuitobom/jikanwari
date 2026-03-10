@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import type { Teacher, Subject } from '../../types'
-import { DAY_LABELS, DAYS } from '../../utils/constants'
+import { DAY_LABELS, DAYS, SUBJECT_CATEGORIES } from '../../utils/constants'
 
 interface TeacherListProps {
   teachers: Teacher[]
@@ -13,6 +13,17 @@ export function TeacherList({ teachers, subjects, onEdit, onDelete }: TeacherLis
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const subjectMap = Object.fromEntries(subjects.map((s) => [s.id, s]))
+
+  // 教科順 → 名前順にソート
+  const sorted = useMemo(() => {
+    const deptOrder = new Map(SUBJECT_CATEGORIES.map((c, i) => [c, i]))
+    return [...teachers].sort((a, b) => {
+      const dA = a.department ? (deptOrder.get(a.department) ?? 98) : 99
+      const dB = b.department ? (deptOrder.get(b.department) ?? 98) : 99
+      if (dA !== dB) return dA - dB
+      return a.name.localeCompare(b.name)
+    })
+  }, [teachers])
 
   const handleDeleteClick = (id: string) => {
     setDeletingId(id)
@@ -47,7 +58,7 @@ export function TeacherList({ teachers, subjects, onEdit, onDelete }: TeacherLis
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {teachers.map((teacher) => {
+      {sorted.map((teacher) => {
         const isDeleting = deletingId === teacher.id
         const teacherSubjects = teacher.subjectIds
           .map((id) => subjectMap[id])
