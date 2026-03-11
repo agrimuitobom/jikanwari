@@ -78,6 +78,7 @@ function TeacherSection() {
   const { teachers, loading, error, clearError, addTeacher, updateTeacher, deleteTeacher } =
     useTeachers()
   const { subjects } = useSubjects()
+  const { assignments } = useAssignments()
 
   const [editTarget, setEditTarget] = useState<Teacher | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -179,6 +180,7 @@ function TeacherSection() {
           <TeacherList
             teachers={filteredTeachers}
             subjects={subjects}
+            assignments={assignments}
             onEdit={openEdit}
             onDelete={deleteTeacher}
           />
@@ -195,6 +197,7 @@ function TeacherSection() {
 function SubjectSection() {
   const { subjects, loading, error, clearError, addSubject, updateSubject, deleteSubject } =
     useSubjects()
+  const { assignments } = useAssignments()
 
   const [editTarget, setEditTarget] = useState<Subject | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -270,6 +273,7 @@ function SubjectSection() {
           </div>
           <SubjectList
             subjects={subjects}
+            assignments={assignments}
             onEdit={openEdit}
             onDelete={deleteSubject}
           />
