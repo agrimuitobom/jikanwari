@@ -1,6 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Assignment, Teacher, Subject } from '../../types'
 import { getClassLabel } from '../../utils/constants'
+
+type SortKey = 'class' | 'subject' | 'teacher'
+type SortDir = 'asc' | 'desc'
 
 interface AssignmentListProps {
   assignments: Assignment[]
@@ -18,9 +21,69 @@ export function AssignmentList({
   onDelete,
 }: AssignmentListProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [sortKey, setSortKey] = useState<SortKey>('class')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
 
   const teacherMap = Object.fromEntries(teachers.map((t) => [t.id, t]))
   const subjectMap = Object.fromEntries(subjects.map((s) => [s.id, s]))
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  const sortedAssignments = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1
+    return [...assignments].sort((a, b) => {
+      let cmp = 0
+      switch (sortKey) {
+        case 'class':
+          cmp = getClassLabel(a.classId).localeCompare(getClassLabel(b.classId), 'ja')
+          break
+        case 'subject': {
+          const sA = subjectMap[a.subjectId]
+          const sB = subjectMap[b.subjectId]
+          // 教科カテゴリ → 科目名
+          const catCmp = (sA?.category ?? '').localeCompare(sB?.category ?? '', 'ja')
+          cmp = catCmp !== 0 ? catCmp : (sA?.name ?? '').localeCompare(sB?.name ?? '', 'ja')
+          break
+        }
+        case 'teacher': {
+          const tA = a.teacherIds.map((id) => teacherMap[id]?.name ?? '').sort().join(',')
+          const tB = b.teacherIds.map((id) => teacherMap[id]?.name ?? '').sort().join(',')
+          cmp = tA.localeCompare(tB, 'ja')
+          break
+        }
+      }
+      // 同値ならクラス順をフォールバック
+      if (cmp === 0 && sortKey !== 'class') {
+        cmp = getClassLabel(a.classId).localeCompare(getClassLabel(b.classId), 'ja')
+      }
+      return cmp * dir
+    })
+  }, [assignments, sortKey, sortDir, subjectMap, teacherMap])
+
+  const SortIcon = ({ column }: { column: SortKey }) => {
+    const active = sortKey === column
+    return (
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 16 16"
+        fill="currentColor"
+        className={`ml-1 inline h-3.5 w-3.5 ${active ? 'text-primary-600' : 'text-gray-300'}`}
+      >
+        {active && sortDir === 'desc' ? (
+          <path fillRule="evenodd" d="M8 2a.75.75 0 0 1 .75.75v8.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V2.75A.75.75 0 0 1 8 2Z" clipRule="evenodd" />
+        ) : (
+          <path fillRule="evenodd" d="M8 14a.75.75 0 0 0 .75-.75V4.56l2.22 2.22a.75.75 0 1 0 1.06-1.06l-3.5-3.5a.75.75 0 0 0-1.06 0l-3.5 3.5a.75.75 0 0 0 1.06 1.06l2.22-2.22v8.69c0 .414.336.75.75.75Z" clipRule="evenodd" />
+        )}
+      </svg>
+    )
+  }
 
   if (assignments.length === 0) {
     return (
@@ -49,14 +112,26 @@ export function AssignmentList({
       <table className="w-full text-sm">
         <thead className="border-b border-gray-200 bg-gray-50">
           <tr>
-            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+            <th
+              className="cursor-pointer select-none px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700"
+              onClick={() => toggleSort('class')}
+            >
               クラス
+              <SortIcon column="class" />
             </th>
-            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+            <th
+              className="cursor-pointer select-none px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700"
+              onClick={() => toggleSort('subject')}
+            >
               科目
+              <SortIcon column="subject" />
             </th>
-            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+            <th
+              className="cursor-pointer select-none px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700"
+              onClick={() => toggleSort('teacher')}
+            >
               担当教員
+              <SortIcon column="teacher" />
             </th>
             <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide text-gray-500">
               週コマ数
@@ -65,7 +140,7 @@ export function AssignmentList({
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
-          {assignments.map((assignment) => {
+          {sortedAssignments.map((assignment) => {
             const subject = subjectMap[assignment.subjectId]
             const assignedTeachers = assignment.teacherIds
               .map((id) => teacherMap[id])
