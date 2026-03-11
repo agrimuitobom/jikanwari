@@ -56,7 +56,7 @@ export function AssignmentBulkForm({
     e.preventDefault()
     setFormError(null)
 
-    const validRows = rows.filter((r) => r.classId && r.subjectId && r.teacherIds.length > 0)
+    const validRows = rows.filter((r) => r.classId && r.subjectId && r.teacherIds.length > 0 && r.weeklyCount >= 1)
     if (validRows.length === 0) {
       setFormError('有効な行が1つもありません。クラス・科目・教員を設定してください。')
       return
@@ -114,57 +114,69 @@ export function AssignmentBulkForm({
           <div key={idx} className="flex flex-col sm:flex-row items-start gap-2 rounded-lg border border-gray-200 bg-white p-3">
             <div className="grid flex-1 w-full grid-cols-2 sm:grid-cols-4 gap-2">
               {/* クラス */}
-              <select
-                value={row.classId}
-                onChange={(e) => updateRow(idx, { classId: e.target.value })}
-                className="form-select text-sm"
-              >
-                <option value="">クラス</option>
-                {classGroups.map((g) => (
-                  <optgroup key={g.grade} label={`${g.grade}年生`}>
-                    {g.classes.map((c) => (
-                      <option key={c.id} value={c.id}>{c.displayName}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
+              <label className="block">
+                {idx === 0 && <span className="text-xs font-medium text-gray-500 mb-1 block">クラス</span>}
+                <select
+                  value={row.classId}
+                  onChange={(e) => updateRow(idx, { classId: e.target.value })}
+                  className="form-select text-sm w-full"
+                >
+                  <option value="">選択...</option>
+                  {classGroups.map((g) => (
+                    <optgroup key={g.grade} label={`${g.grade}年生`}>
+                      {g.classes.map((c) => (
+                        <option key={c.id} value={c.id}>{c.displayName}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
 
               {/* 科目 */}
-              <select
-                value={row.subjectId}
-                onChange={(e) => handleSubjectChange(idx, e.target.value)}
-                className="form-select text-sm"
-              >
-                <option value="">科目</option>
-                {subjects.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+              <label className="block">
+                {idx === 0 && <span className="text-xs font-medium text-gray-500 mb-1 block">科目</span>}
+                <select
+                  value={row.subjectId}
+                  onChange={(e) => handleSubjectChange(idx, e.target.value)}
+                  className="form-select text-sm w-full"
+                >
+                  <option value="">選択...</option>
+                  {subjects.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </label>
 
               {/* 教員 */}
-              <select
-                value={row.teacherIds[0] ?? ''}
-                onChange={(e) => updateRow(idx, {
-                  teacherIds: e.target.value ? [e.target.value] : [],
-                })}
-                className="form-select text-sm"
-              >
-                <option value="">教員</option>
-                {teachers.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
+              <label className="block">
+                {idx === 0 && <span className="text-xs font-medium text-gray-500 mb-1 block">教員</span>}
+                <select
+                  value={row.teacherIds[0] ?? ''}
+                  onChange={(e) => updateRow(idx, {
+                    teacherIds: e.target.value ? [e.target.value] : [],
+                  })}
+                  className="form-select text-sm w-full"
+                >
+                  <option value="">選択...</option>
+                  {teachers.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+              </label>
 
               {/* 週コマ数 */}
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={row.weeklyCount}
-                onChange={(e) => updateRow(idx, { weeklyCount: Number(e.target.value) })}
-                className="form-input text-sm"
-                placeholder="週コマ"
-              />
+              <label className="block">
+                {idx === 0 && <span className="text-xs font-medium text-gray-500 mb-1 block">週コマ数</span>}
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={row.weeklyCount || ''}
+                  onChange={(e) => updateRow(idx, { weeklyCount: Number(e.target.value) || 0 })}
+                  className="form-input text-sm w-full"
+                  placeholder="週コマ数"
+                />
+              </label>
             </div>
 
             {/* 削除ボタン */}
@@ -197,7 +209,7 @@ export function AssignmentBulkForm({
           キャンセル
         </button>
         <button type="submit" disabled={submitting} className="btn-primary">
-          {submitting ? '登録中...' : `${rows.filter((r) => r.classId && r.subjectId && r.teacherIds.length > 0).length}件を一括登録`}
+          {submitting ? '登録中...' : `${rows.filter((r) => r.classId && r.subjectId && r.teacherIds.length > 0 && r.weeklyCount >= 1).length}件を一括登録`}
         </button>
       </div>
     </form>
