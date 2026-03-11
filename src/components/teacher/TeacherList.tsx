@@ -1,18 +1,30 @@
-import { useState } from 'react'
-import type { Teacher, Subject } from '../../types'
-import { DAY_LABELS, DAYS } from '../../utils/constants'
+import { useState, useMemo } from 'react'
+import type { Teacher, Subject, Assignment } from '../../types'
+import { DAY_LABELS, DAYS, SUBJECT_CATEGORIES } from '../../utils/constants'
 
 interface TeacherListProps {
   teachers: Teacher[]
   subjects: Subject[]
+  assignments: Assignment[]
   onEdit: (teacher: Teacher) => void
   onDelete: (id: string) => void
 }
 
-export function TeacherList({ teachers, subjects, onEdit, onDelete }: TeacherListProps) {
+export function TeacherList({ teachers, subjects, assignments, onEdit, onDelete }: TeacherListProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const subjectMap = Object.fromEntries(subjects.map((s) => [s.id, s]))
+
+  // 教科順 → 名前順にソート
+  const sorted = useMemo(() => {
+    const deptOrder = new Map(SUBJECT_CATEGORIES.map((c, i) => [c, i]))
+    return [...teachers].sort((a, b) => {
+      const dA = a.department ? (deptOrder.get(a.department) ?? 98) : 99
+      const dB = b.department ? (deptOrder.get(b.department) ?? 98) : 99
+      if (dA !== dB) return dA - dB
+      return a.name.localeCompare(b.name)
+    })
+  }, [teachers])
 
   const handleDeleteClick = (id: string) => {
     setDeletingId(id)
@@ -47,7 +59,7 @@ export function TeacherList({ teachers, subjects, onEdit, onDelete }: TeacherLis
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {teachers.map((teacher) => {
+      {sorted.map((teacher) => {
         const isDeleting = deletingId === teacher.id
         const teacherSubjects = teacher.subjectIds
           .map((id) => subjectMap[id])
@@ -165,29 +177,37 @@ export function TeacherList({ teachers, subjects, onEdit, onDelete }: TeacherLis
             </div>
 
             {/* 削除確認 */}
-            {isDeleting && (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-                <p className="mb-2 text-xs font-medium text-red-700">
-                  「{teacher.name}」を削除しますか？
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setDeletingId(null)}
-                    className="btn-secondary flex-1 py-1 text-xs"
-                  >
-                    キャンセル
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteConfirm(teacher.id)}
-                    className="btn-danger flex-1 py-1 text-xs"
-                  >
-                    削除する
-                  </button>
+            {isDeleting && (() => {
+              const affected = assignments.filter((a) => a.teacherIds.includes(teacher.id))
+              return (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                  <p className="mb-1 text-xs font-medium text-red-700">
+                    「{teacher.name}」を削除しますか？
+                  </p>
+                  {affected.length > 0 && (
+                    <p className="mb-2 text-[11px] text-red-600">
+                      この教員を含む授業割当が{affected.length}件あります。割当の教員リストから外れます。
+                    </p>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDeletingId(null)}
+                      className="btn-secondary flex-1 py-1 text-xs"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteConfirm(teacher.id)}
+                      className="btn-danger flex-1 py-1 text-xs"
+                    >
+                      削除する
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )
+            })()}
           </div>
         )
       })}

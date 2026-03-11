@@ -1,14 +1,15 @@
 import { useState, useMemo } from 'react'
-import type { Subject, Grade, SubjectCategory } from '../../types'
+import type { Subject, Grade, SubjectCategory, Assignment } from '../../types'
 import { GRADES, GRADE_LABELS, SUBJECT_CATEGORIES } from '../../utils/constants'
 
 interface SubjectListProps {
   subjects: Subject[]
+  assignments: Assignment[]
   onEdit: (subject: Subject) => void
   onDelete: (id: string) => void
 }
 
-export function SubjectList({ subjects, onEdit, onDelete }: SubjectListProps) {
+export function SubjectList({ subjects, assignments, onEdit, onDelete }: SubjectListProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [filterGrade, setFilterGrade] = useState<Grade | 'all'>('all')
   const [filterCategory, setFilterCategory] = useState<SubjectCategory | 'all'>('all')
@@ -174,29 +175,37 @@ export function SubjectList({ subjects, onEdit, onDelete }: SubjectListProps) {
                 </div>
 
                 {/* 削除確認 */}
-                {isDeleting && (
-                  <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-                    <p className="mb-2 text-xs font-medium text-red-700">
-                      「{subject.name}」を削除しますか？
-                    </p>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setDeletingId(null)}
-                        className="btn-secondary flex-1 py-1 text-xs"
-                      >
-                        キャンセル
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { onDelete(subject.id); setDeletingId(null) }}
-                        className="btn-danger flex-1 py-1 text-xs"
-                      >
-                        削除する
-                      </button>
+                {isDeleting && (() => {
+                  const affected = assignments.filter((a) => a.subjectId === subject.id)
+                  return (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                      <p className="mb-1 text-xs font-medium text-red-700">
+                        「{subject.name}」を削除しますか？
+                      </p>
+                      {affected.length > 0 && (
+                        <p className="mb-2 text-[11px] text-red-600">
+                          この科目を使用する授業割当が{affected.length}件あります。削除すると割当が無効になります。
+                        </p>
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDeletingId(null)}
+                          className="btn-secondary flex-1 py-1 text-xs"
+                        >
+                          キャンセル
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { onDelete(subject.id); setDeletingId(null) }}
+                          className="btn-danger flex-1 py-1 text-xs"
+                        >
+                          削除する
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )
+                })()}
               </div>
             )
           })}
