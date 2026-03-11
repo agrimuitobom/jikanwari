@@ -111,6 +111,25 @@ export function AssignmentBulkForm({
     }))
     .filter((g) => g.subjects.length > 0)
 
+  // 所属教科ごとに教員をグルーピング（五十音順ソート）
+  const teacherGroups = [
+    ...SUBJECT_CATEGORIES
+      .map((cat) => ({
+        label: cat,
+        teachers: teachers
+          .filter((t) => t.department === cat)
+          .sort((a, b) => a.name.localeCompare(b.name, 'ja')),
+      }))
+      .filter((g) => g.teachers.length > 0),
+    // 所属教科未設定の教員
+    ...(() => {
+      const unassigned = teachers
+        .filter((t) => !t.department)
+        .sort((a, b) => a.name.localeCompare(b.name, 'ja'))
+      return unassigned.length > 0 ? [{ label: 'その他', teachers: unassigned }] : []
+    })(),
+  ]
+
   return (
     <form onSubmit={handleSubmit} className="space-y-6" noValidate>
       <div className="flex items-center justify-between border-b border-gray-200 pb-4">
@@ -172,8 +191,12 @@ export function AssignmentBulkForm({
                   className="form-select text-sm w-full"
                 >
                   <option value="">選択...</option>
-                  {teachers.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
+                  {teacherGroups.map((g) => (
+                    <optgroup key={g.label} label={g.label}>
+                      {g.teachers.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               </label>
