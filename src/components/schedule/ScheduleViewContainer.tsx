@@ -1,14 +1,17 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useMemo } from 'react'
 import type { DayOfWeek, Period, Teacher, Subject, Assignment, ScheduleEntry, TimeSlot } from '../../types'
 import { CLASS_OPTIONS } from '../../utils/constants'
 import type { ClassOption } from '../../utils/constants'
 import { runSchedulerInWorker } from '../../utils/runSchedulerWorker'
 import type { SchedulerProgress, SchedulerResult, UnplacedTask, SchedulerOptions } from '../../utils/scheduler'
 import { useSchedules } from '../../hooks/useSchedules'
+import { detectConstraintConflicts } from '../../utils/constraintChecker'
+import type { ConstraintWarning } from '../../utils/constraintChecker'
 import { ErrorAlert } from '../common/ErrorAlert'
 import { TimetableGrid } from './TimetableGrid'
 import type { ViewMode } from './TimetableGrid'
 import { UnplacedSidebar } from './UnplacedSidebar'
+import { ScheduleCompare } from './ScheduleCompare'
 
 // ============================================================
 // Props
@@ -157,6 +160,16 @@ export function ScheduleViewContainer({
   const [editingNameId, setEditingNameId] = useState<string | null>(null)
   const [editingNameValue, setEditingNameValue] = useState('')
   const [saving, setSaving] = useState(false)
+
+  // ---- 制約矛盾事前検出 ----
+  const constraintWarnings = useMemo<ConstraintWarning[]>(
+    () => (assignments.length > 0 ? detectConstraintConflicts(teachers, subjects, assignments) : []),
+    [teachers, subjects, assignments],
+  )
+  const [warningsDismissed, setWarningsDismissed] = useState(false)
+
+  // ---- スケジュール比較 ----
+  const [compareIds, setCompareIds] = useState<[string, string] | null>(null)
 
   // ---- Undo履歴 ----
   type UndoState = { entries: ScheduleEntry[]; unplacedTasks: UnplacedTask[] }
@@ -328,10 +341,69 @@ export function ScheduleViewContainer({
   // ---- データ不足チェック ----
   const hasData = teachers.length > 0 && subjects.length > 0 && assignments.length > 0
 
+  // 比較モードの解決
+  const compareSchedules = compareIds
+    ? [schedules.find((s) => s.id === compareIds[0]), schedules.find((s) => s.id === compareIds[1])]
+    : null
+
   return (
     <div className="space-y-4">
       {schedulesError && (
         <ErrorAlert message={schedulesError.message} onDismiss={clearSchedulesError} />
+      )}
+
+      {/* 制約矛盾の警告 */}
+      {constraintWarnings.length > 0 && !warningsDismissed && (
+        <div className="card p-4 border-amber-200 bg-amber-50">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5 text-amber-500 shrink-0 mt-0.5">
+                <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
+              </svg>
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-amber-800">制約矛盾の検出 ({constraintWarnings.length}件)</p>
+                <ul className="space-y-0.5">
+                  {constraintWarnings.map((w, i) => {
+                    const assignment = assignments.find((a) => a.id === w.assignmentId)
+                    const subject = assignment ? subjects.find((s) => s.id === assignment.subjectId) : null
+                    const classLabel = assignment ? classOptions.find((c) => c.id === assignment.classId)?.displayName : null
+                    const prefix = classLabel && subject ? `${classLabel} ${subject.name}: ` : ''
+                    return (
+                      <li key={i} className="text-xs flex items-start gap-1.5">
+                        <span className={`shrink-0 mt-0.5 inline-block w-1.5 h-1.5 rounded-full ${w.severity === 'error' ? 'bg-red-500' : 'bg-amber-400'}`} />
+                        <span className={w.severity === 'error' ? 'text-red-700' : 'text-amber-700'}>
+                          {prefix}{w.message}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setWarningsDismissed(true)}
+              className="text-amber-400 hover:text-amber-600 shrink-0"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* スケジュール比較ビュー */}
+      {compareSchedules && compareSchedules[0] && compareSchedules[1] && (
+        <ScheduleCompare
+          scheduleA={compareSchedules[0]}
+          scheduleB={compareSchedules[1]}
+          teachers={teachers}
+          subjects={subjects}
+          assignments={assignments}
+          classOptions={classOptions}
+          onClose={() => setCompareIds(null)}
+        />
       )}
 
       {/* ツールバー */}
@@ -512,6 +584,31 @@ export function ScheduleViewContainer({
           <div className="flex items-center gap-2 mb-3">
             <h3 className="text-sm font-semibold text-gray-700">保存済みの時間割案</h3>
             <span className="badge bg-gray-100 text-gray-600">{schedules.length}件</span>
+            {/* 比較ボタン */}
+            {schedules.length >= 2 && (
+              <div className="flex items-center gap-1 ml-auto text-xs">
+                <span className="text-gray-400">比較:</span>
+                <select
+                  className="form-select text-xs py-0.5 w-auto"
+                  defaultValue=""
+                  onChange={(e) => {
+                    const val = e.target.value
+                    if (!val) { setCompareIds(null); return }
+                    const [a, b] = val.split(':')
+                    setCompareIds([a, b])
+                  }}
+                >
+                  <option value="">選択...</option>
+                  {schedules.flatMap((a, i) =>
+                    schedules.slice(i + 1).map((b) => (
+                      <option key={`${a.id}:${b.id}`} value={`${a.id}:${b.id}`}>
+                        {a.name} vs {b.name}
+                      </option>
+                    )),
+                  )}
+                </select>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             {schedules.map((sched) => {
