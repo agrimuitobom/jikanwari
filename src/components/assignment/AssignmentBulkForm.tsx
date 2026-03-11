@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Teacher, Subject, Assignment, CreateInput } from '../../types'
 import { ErrorAlert } from '../common/ErrorAlert'
-import { CLASS_OPTIONS } from '../../utils/constants'
+import { CLASS_OPTIONS, SUBJECT_CATEGORIES } from '../../utils/constants'
 import type { ClassOption } from '../../utils/constants'
 
 interface BulkRow {
@@ -101,6 +101,16 @@ export function AssignmentBulkForm({
     classes: CLASS_OPTIONS.filter((c) => c.grade === grade),
   }))
 
+  // 教科カテゴリごとに科目をグルーピング（科目名でソート）
+  const subjectGroups = SUBJECT_CATEGORIES
+    .map((cat) => ({
+      category: cat,
+      subjects: subjects
+        .filter((s) => s.category === cat)
+        .sort((a, b) => a.name.localeCompare(b.name, 'ja')),
+    }))
+    .filter((g) => g.subjects.length > 0)
+
   return (
     <form onSubmit={handleSubmit} className="space-y-6" noValidate>
       <div className="flex items-center justify-between border-b border-gray-200 pb-4">
@@ -141,8 +151,12 @@ export function AssignmentBulkForm({
                   className="form-select text-sm w-full"
                 >
                   <option value="">選択...</option>
-                  {subjects.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
+                  {subjectGroups.map((g) => (
+                    <optgroup key={g.category} label={g.category}>
+                      {g.subjects.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
               </label>
