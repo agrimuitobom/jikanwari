@@ -236,7 +236,18 @@ export function TeacherForm({ initialValues, subjects, onSubmit, onCancel }: Tea
           <select
             id="teacher-department"
             value={form.department}
-            onChange={(e) => setForm((p) => ({ ...p, department: e.target.value as SubjectCategory | '' }))}
+            onChange={(e) => {
+              const dept = e.target.value as SubjectCategory | ''
+              setForm((p) => {
+                if (!dept) return { ...p, department: dept }
+                // 選択した教科の科目IDを自動追加（既存選択は維持）
+                const deptSubjectIds = subjects
+                  .filter((s) => s.category === dept)
+                  .map((s) => s.id)
+                const merged = Array.from(new Set([...p.subjectIds, ...deptSubjectIds]))
+                return { ...p, department: dept, subjectIds: merged }
+              })
+            }}
             className="form-input"
           >
             <option value="">未設定</option>
