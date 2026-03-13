@@ -309,50 +309,65 @@ export function TeacherForm({ initialValues, subjects, onSubmit, onCancel }: Tea
         {subjects.length === 0 ? (
           <p className="text-sm text-gray-400">科目がまだ登録されていません</p>
         ) : (
-          <div className="flex flex-wrap gap-2">
-            {subjects.map((subject) => {
-              const checked = form.subjectIds.includes(subject.id)
-              return (
-                <label key={subject.id} className="cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => handleSubjectToggle(subject.id)}
-                    className="sr-only"
-                  />
-                  <div
-                    className={[
-                      'flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all',
-                      checked
-                        ? 'border-primary-300 bg-primary-50 text-primary-700 shadow-sm'
-                        : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50',
-                    ].join(' ')}
-                  >
-                    {subject.color && (
-                      <span
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: subject.color }}
-                      />
-                    )}
-                    {subject.name}
-                    {checked && (
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 16 16"
-                        fill="currentColor"
-                        className="h-3.5 w-3.5 text-primary-600"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z"
-                          clipRule="evenodd"
-                        />
-                      </svg>
-                    )}
+          <div className="space-y-4">
+            {SUBJECT_CATEGORIES
+              .map((cat) => ({
+                category: cat,
+                items: subjects
+                  .filter((s) => s.category === cat)
+                  .sort((a, b) => a.name.localeCompare(b.name, 'ja')),
+              }))
+              .filter((g) => g.items.length > 0)
+              .map((group) => (
+                <div key={group.category}>
+                  <p className="mb-1.5 text-xs font-semibold text-gray-500">{group.category}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {group.items.map((subject) => {
+                      const checked = form.subjectIds.includes(subject.id)
+                      return (
+                        <label key={subject.id} className="cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => handleSubjectToggle(subject.id)}
+                            className="sr-only"
+                          />
+                          <div
+                            className={[
+                              'flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all',
+                              checked
+                                ? 'border-primary-300 bg-primary-50 text-primary-700 shadow-sm'
+                                : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50',
+                            ].join(' ')}
+                          >
+                            {subject.color && (
+                              <span
+                                className="h-2.5 w-2.5 rounded-full"
+                                style={{ backgroundColor: subject.color }}
+                              />
+                            )}
+                            {subject.name}
+                            {checked && (
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                viewBox="0 0 16 16"
+                                fill="currentColor"
+                                className="h-3.5 w-3.5 text-primary-600"
+                              >
+                                <path
+                                  fillRule="evenodd"
+                                  d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                            )}
+                          </div>
+                        </label>
+                      )
+                    })}
                   </div>
-                </label>
-              )
-            })}
+                </div>
+              ))}
           </div>
         )}
       </section>
