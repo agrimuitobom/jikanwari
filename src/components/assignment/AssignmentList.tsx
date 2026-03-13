@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import type { Assignment, Teacher, Subject } from '../../types'
-import { getClassLabel } from '../../utils/constants'
+import type { Assignment, Teacher, Subject, SubjectCategory } from '../../types'
+import { getClassLabel, CLASS_OPTIONS, SUBJECT_CATEGORIES } from '../../utils/constants'
 
 type SortKey = 'class' | 'subject' | 'teacher'
 type SortDir = 'asc' | 'desc'
@@ -23,6 +23,9 @@ export function AssignmentList({
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('class')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [filterClass, setFilterClass] = useState('')
+  const [filterCategory, setFilterCategory] = useState<SubjectCategory | ''>('')
+  const [filterTeacher, setFilterTeacher] = useState('')
 
   const teacherMap = Object.fromEntries(teachers.map((t) => [t.id, t]))
   const subjectMap = Object.fromEntries(subjects.map((s) => [s.id, s]))
@@ -36,9 +39,21 @@ export function AssignmentList({
     }
   }
 
+  const hasFilter = !!(filterClass || filterCategory || filterTeacher)
+
   const sortedAssignments = useMemo(() => {
+    let filtered = assignments
+    if (filterClass) {
+      filtered = filtered.filter((a) => a.classId === filterClass)
+    }
+    if (filterCategory) {
+      filtered = filtered.filter((a) => subjectMap[a.subjectId]?.category === filterCategory)
+    }
+    if (filterTeacher) {
+      filtered = filtered.filter((a) => a.teacherIds.includes(filterTeacher))
+    }
     const dir = sortDir === 'asc' ? 1 : -1
-    return [...assignments].sort((a, b) => {
+    return [...filtered].sort((a, b) => {
       let cmp = 0
       switch (sortKey) {
         case 'class':
@@ -65,7 +80,7 @@ export function AssignmentList({
       }
       return cmp * dir
     })
-  }, [assignments, sortKey, sortDir, subjectMap, teacherMap])
+  }, [assignments, sortKey, sortDir, subjectMap, teacherMap, filterClass, filterCategory, filterTeacher])
 
   const SortIcon = ({ column }: { column: SortKey }) => {
     const active = sortKey === column
@@ -107,9 +122,84 @@ export function AssignmentList({
     )
   }
 
+  // クラス選択肢（学年グループ）
+  const classGroups = [1, 2, 3].map((grade) => ({
+    grade,
+    classes: CLASS_OPTIONS.filter((c) => c.grade === grade),
+  }))
+
+  // 教科選択肢（使用中のもののみ）
+  const usedCategories = useMemo(() => {
+    const cats = new Set(assignments.map((a) => subjectMap[a.subjectId]?.category).filter(Boolean))
+    return SUBJECT_CATEGORIES.filter((c) => cats.has(c))
+  }, [assignments, subjectMap])
+
+  // 教員選択肢（五十音順）
+  const teacherOptions = useMemo(() => {
+    const ids = new Set(assignments.flatMap((a) => a.teacherIds))
+    return teachers
+      .filter((t) => ids.has(t.id))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ja'))
+  }, [assignments, teachers])
+
   return (
-    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-      <table className="w-full text-sm">
+    <div className="space-y-3">
+      {/* フィルタバー */}
+      <div className="flex flex-wrap items-center gap-3">
+        <select
+          value={filterClass}
+          onChange={(e) => setFilterClass(e.target.value)}
+          className="form-select rounded-lg border-gray-200 py-1.5 text-sm"
+        >
+          <option value="">全クラス</option>
+          {classGroups.map((g) => (
+            <optgroup key={g.grade} label={`${g.grade}年生`}>
+              {g.classes.map((c) => (
+                <option key={c.id} value={c.id}>{c.displayName}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+
+        <select
+          value={filterCategory}
+          onChange={(e) => setFilterCategory(e.target.value as SubjectCategory | '')}
+          className="form-select rounded-lg border-gray-200 py-1.5 text-sm"
+        >
+          <option value="">全教科</option>
+          {usedCategories.map((cat) => (
+            <option key={cat} value={cat}>{cat}</option>
+          ))}
+        </select>
+
+        <select
+          value={filterTeacher}
+          onChange={(e) => setFilterTeacher(e.target.value)}
+          className="form-select rounded-lg border-gray-200 py-1.5 text-sm"
+        >
+          <option value="">全教員</option>
+          {teacherOptions.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+
+        {hasFilter && (
+          <button
+            type="button"
+            onClick={() => { setFilterClass(''); setFilterCategory(''); setFilterTeacher('') }}
+            className="text-xs text-gray-500 hover:text-gray-700 underline"
+          >
+            フィルタ解除
+          </button>
+        )}
+
+        <span className="ml-auto text-xs text-gray-400">
+          {sortedAssignments.length}/{assignments.length}件
+        </span>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+        <table className="w-full text-sm">
         <thead className="border-b border-gray-200 bg-gray-50">
           <tr>
             <th
@@ -265,6 +355,7 @@ export function AssignmentList({
           })}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
