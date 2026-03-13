@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from 'react'
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
 import type { DayOfWeek, Period, Teacher, Subject, Assignment, ScheduleEntry, TimeSlot } from '../../types'
 import { CLASS_OPTIONS } from '../../utils/constants'
 import type { ClassOption } from '../../utils/constants'
@@ -159,7 +159,28 @@ export function ScheduleViewContainer({
   const [activeScheduleId, setActiveScheduleId] = useState<string | null>(null)
   const [editingNameId, setEditingNameId] = useState<string | null>(null)
   const [editingNameValue, setEditingNameValue] = useState('')
-  const [saving, setSaving] = useState(false)
+
+  // ---- 初回ロード時: 最新の保存済みスケジュールを自動復元 ----
+  const initialRestoreDone = useRef(false)
+  useEffect(() => {
+    if (initialRestoreDone.current || schedules.length === 0 || entries.length > 0) return
+    initialRestoreDone.current = true
+    // 最新（updatedAt降順）のスケジュールを復元
+    const latest = [...schedules].sort(
+      (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
+    )[0]
+    if (latest) {
+      setEntries([...latest.entries])
+      setUnplacedTasks([...latest.unplacedTasks])
+      setResult({
+        entries: latest.entries,
+        score: latest.score,
+        isComplete: latest.isComplete,
+        unplacedTasks: latest.unplacedTasks,
+      })
+      setActiveScheduleId(latest.id)
+    }
+  }, [schedules]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- 制約矛盾事前検出 ----
   const constraintWarnings = useMemo<ConstraintWarning[]>(
@@ -212,23 +233,15 @@ export function ScheduleViewContainer({
       setEntries(res.entries)
       setUnplacedTasks(res.unplacedTasks)
       setResult(res)
+
+      // 生成結果を自動保存
+      const name = `案${schedules.length + 1}`
+      const saved = await saveSchedule(name, res, res.unplacedTasks)
+      setActiveScheduleId(saved.id)
     } finally {
       setIsRunning(false)
     }
-  }, [teachers, subjects, assignments, schedulerOptions])
-
-  // ---- Firestoreに保存 ----
-  const handleSaveToFirestore = useCallback(async () => {
-    if (!result) return
-    setSaving(true)
-    try {
-      const name = `案${schedules.length + 1}`
-      const saved = await saveSchedule(name, result, unplacedTasks)
-      setActiveScheduleId(saved.id)
-    } finally {
-      setSaving(false)
-    }
-  }, [result, unplacedTasks, schedules.length, saveSchedule])
+  }, [teachers, subjects, assignments, schedulerOptions, schedules.length, saveSchedule])
 
   // ---- 保存済みスケジュールの復元 ----
   const handleRestoreSchedule = useCallback((scheduleId: string) => {
@@ -563,17 +576,14 @@ export function ScheduleViewContainer({
               {result.entries.filter((e) => !e.isConsecutiveSecond).length} コマ配置
             </span>
             <div className="flex-1" />
-            <button
-              type="button"
-              onClick={handleSaveToFirestore}
-              disabled={saving}
-              className="btn-secondary text-xs"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
-                <path d="M3.75 2A1.75 1.75 0 0 0 2 3.75v8.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 12.25v-5.5a.75.75 0 0 0-.22-.53l-4-4A.75.75 0 0 0 9.25 2H3.75Zm6.5 4a.75.75 0 0 1-.75-.75V3.56L11.94 6H10.25ZM5.75 9.5a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 0-1.5h-4.5Z" />
-              </svg>
-              {saving ? '保存中...' : 'この結果を保存'}
-            </button>
+            {activeScheduleId && (
+              <span className="flex items-center gap-1 text-xs text-green-600">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3.5 w-3.5">
+                  <path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clipRule="evenodd" />
+                </svg>
+                保存済み
+              </span>
+            )}
           </div>
         )}
       </div>
