@@ -82,6 +82,7 @@ function docToSubject(snap: QueryDocumentSnapshot): Subject {
     credits: d.credits as number,
     weeklyFrequency: d.weeklyFrequency as number,
     isConsecutive: d.isConsecutive as boolean,
+    noConsecutive: (d.noConsecutive as boolean) ?? false,
     // preferredPeriods は { from: number, to: number } のオブジェクト or undefined
     ...(d.preferredPeriods !== undefined && d.preferredPeriods !== null
       ? { preferredPeriods: d.preferredPeriods as Subject['preferredPeriods'] }
@@ -117,6 +118,7 @@ export async function addSubject(input: CreateInput<Subject>): Promise<Subject> 
     credits: input.credits,
     weeklyFrequency: input.weeklyFrequency,
     isConsecutive: input.isConsecutive,
+    noConsecutive: input.noConsecutive,
     // preferredPeriods が undefined の場合はフィールド自体を省略
     ...(input.preferredPeriods !== undefined ? { preferredPeriods: input.preferredPeriods } : {}),
     ...(input.color !== undefined ? { color: input.color } : {}),

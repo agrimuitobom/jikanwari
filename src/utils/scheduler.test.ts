@@ -33,6 +33,7 @@ function makeSubject(overrides: Partial<Subject> = {}): Subject {
     credits: 3,
     weeklyFrequency: 3,
     isConsecutive: false,
+    noConsecutive: false,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

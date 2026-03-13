@@ -162,6 +162,7 @@ export function parseCsv(text: string): ParseResult {
       credits,
       weeklyFrequency,
       isConsecutive,
+      noConsecutive: false,
       ...(preferredPeriods ? { preferredPeriods: preferredPeriods as Subject['preferredPeriods'] } : {}),
       color,
     })

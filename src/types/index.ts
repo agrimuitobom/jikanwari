@@ -104,6 +104,8 @@ export interface Subject {
   weeklyFrequency: number
   /** 連続授業フラグ（2コマ連続で配置する必要があるか） */
   isConsecutive: boolean
+  /** 連続配置禁止フラグ（同日に連続して配置しない） */
+  noConsecutive: boolean
   /**
    * 推奨時限範囲。
    * 設定した場合、スケジューラはこの範囲内への配置を優先する。
