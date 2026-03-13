@@ -10,6 +10,7 @@ interface FormState {
   credits: number
   weeklyFrequency: number
   isConsecutive: boolean
+  noConsecutive: boolean
   usePreferred: boolean
   preferredFrom: Period
   preferredTo: Period
@@ -66,6 +67,7 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
     credits: initialValues?.credits ?? 2,
     weeklyFrequency: initialValues?.weeklyFrequency ?? 2,
     isConsecutive: initialValues?.isConsecutive ?? false,
+    noConsecutive: initialValues?.noConsecutive ?? false,
     usePreferred: !!initialValues?.preferredPeriods,
     preferredFrom: initialValues?.preferredPeriods?.from ?? 1,
     preferredTo: initialValues?.preferredPeriods?.to ?? 4,
@@ -110,6 +112,7 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
         credits: form.credits,
         weeklyFrequency: form.weeklyFrequency,
         isConsecutive: form.isConsecutive,
+        noConsecutive: form.noConsecutive,
         ...(form.usePreferred
           ? { preferredPeriods: { from: form.preferredFrom, to: form.preferredTo } }
           : {}),
@@ -233,12 +236,23 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
 
         <Toggle
           checked={form.isConsecutive}
-          onChange={() => setForm((p) => ({ ...p, isConsecutive: !p.isConsecutive }))}
+          onChange={() => setForm((p) => ({ ...p, isConsecutive: !p.isConsecutive, ...(!p.isConsecutive ? { noConsecutive: false } : {}) }))}
           label="連続授業（2コマ連続で配置）"
         />
         {form.isConsecutive && (
           <p className="ml-14 -mt-2 text-xs text-gray-400">
             実験・実習などで2コマ続けて配置する必要がある科目に設定してください
+          </p>
+        )}
+
+        <Toggle
+          checked={form.noConsecutive}
+          onChange={() => setForm((p) => ({ ...p, noConsecutive: !p.noConsecutive, ...(p.noConsecutive ? {} : { isConsecutive: false }) }))}
+          label="連続配置禁止（同日に連続コマに配置しない）"
+        />
+        {form.noConsecutive && (
+          <p className="ml-14 -mt-2 text-xs text-gray-400">
+            同じ日の連続する時限に配置されないよう制約します（例: 1限と2限に入れない）
           </p>
         )}
 
