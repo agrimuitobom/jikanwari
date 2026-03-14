@@ -445,6 +445,7 @@ function ScheduleTab({ classOptions, settings }: { classOptions: import('./utils
       schedulerOptions={{
         maxTeacherPeriodsPerDay: settings.maxTeacherPeriodsPerDay,
         maxIterations: settings.maxIterations,
+        maxRestarts: settings.maxRestarts,
       }}
     />
   )

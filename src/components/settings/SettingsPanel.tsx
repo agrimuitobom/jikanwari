@@ -63,15 +63,34 @@ export function SettingsPanel({ settings, defaults, onUpdate, onReset }: Setting
             <input
               id="maxIterations"
               type="number"
-              min={1000}
-              max={500000}
-              step={1000}
+              min={10000}
+              max={10000000}
+              step={10000}
               value={settings.maxIterations}
-              onChange={(e) => onUpdate({ maxIterations: Math.max(1000, Math.min(500000, Number(e.target.value))) })}
+              onChange={(e) => onUpdate({ maxIterations: Math.max(10000, Math.min(10000000, Number(e.target.value))) })}
               className="form-input w-40"
             />
             <p className="mt-1 text-xs text-gray-400">
               デフォルト: {defaults.maxIterations.toLocaleString()}（大きいほど精度が上がりますが時間がかかります）
+            </p>
+          </div>
+
+          {/* ランダムリスタート回数 */}
+          <div>
+            <label htmlFor="maxRestarts" className="form-label">
+              ランダムリスタート回数
+            </label>
+            <input
+              id="maxRestarts"
+              type="number"
+              min={0}
+              max={50}
+              value={settings.maxRestarts}
+              onChange={(e) => onUpdate({ maxRestarts: Math.max(0, Math.min(50, Number(e.target.value))) })}
+              className="form-input w-32"
+            />
+            <p className="mt-1 text-xs text-gray-400">
+              デフォルト: {defaults.maxRestarts}（探索が行き詰まった場合に順序を変えてやり直す回数。0でリスタートなし）
             </p>
           </div>
         </div>

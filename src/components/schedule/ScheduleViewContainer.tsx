@@ -543,7 +543,12 @@ export function ScheduleViewContainer({
               <span>
                 配置中: {progress.placed} / {progress.total}
               </span>
-              <span>探索: {progress.iterations.toLocaleString()} 回</span>
+              <span>
+                探索: {progress.iterations.toLocaleString()} 回
+                {progress.restarts !== undefined && progress.restarts > 0 && (
+                  <>（リスタート {progress.restarts} 回目）</>
+                )}
+              </span>
             </div>
             <div className="h-1.5 w-full rounded-full bg-gray-200" role="progressbar" aria-valuenow={progress.placed} aria-valuemin={0} aria-valuemax={progress.total}>
               <div
