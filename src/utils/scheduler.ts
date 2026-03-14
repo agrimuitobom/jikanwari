@@ -96,8 +96,8 @@ interface BoardState {
   teacherGrid: Map<string, string>
   /** 配置済みエントリ */
   entries: ScheduleEntry[]
-  /** 各 assignment の残り配置コマ数 */
-  remainingCounts: Map<string, number>
+  /** assignmentId => 配置済みコマ数（weeklyCount超過を防止） */
+  assignmentPlacedCount: Map<string, number>
   /** [day:classId:subjectId] => 配置数（同日同科目の重複検出用） */
   classDaySubjectCount: Map<string, number>
   /** [day:teacherId] => 配置コマ数（教員の日別負荷管理用） */
@@ -446,6 +446,10 @@ function canPlaceSingle(
 ): boolean {
   const classId = assignment.classId
 
+  // 割当の週コマ数上限チェック（最重要: weeklyCountを超えて配置しない）
+  const placedCount = state.assignmentPlacedCount.get(assignment.id) ?? 0
+  if (placedCount >= assignment.weeklyCount) return false
+
   // 科目の配置不可時限チェック
   if (isExcludedPeriodForSubject(subject, period)) return false
 
@@ -626,6 +630,12 @@ function placeTask(
       const cdsKey = classDaySubjectKey(day, classId, subject.id)
       state.classDaySubjectCount.set(cdsKey, (state.classDaySubjectCount.get(cdsKey) ?? 0) + 1)
 
+      // 割当ごとの配置コマ数を加算
+      state.assignmentPlacedCount.set(
+        assignment.id,
+        (state.assignmentPlacedCount.get(assignment.id) ?? 0) + 1,
+      )
+
       state.entries.push(entry)
       newEntries.push(entry)
     }
@@ -666,6 +676,14 @@ function removeEntries(
       state.classDaySubjectCount.delete(cdsKey)
     } else {
       state.classDaySubjectCount.set(cdsKey, cdsCount - 1)
+    }
+
+    // 割当ごとの配置コマ数を減算
+    const apc = state.assignmentPlacedCount.get(entry.assignmentId) ?? 0
+    if (apc <= 1) {
+      state.assignmentPlacedCount.delete(entry.assignmentId)
+    } else {
+      state.assignmentPlacedCount.set(entry.assignmentId, apc - 1)
     }
 
     const idx = state.entries.indexOf(entry)
@@ -849,7 +867,7 @@ function* singleSearch(
     classGrid: new Map(),
     teacherGrid: new Map(),
     entries: [],
-    remainingCounts: new Map(),
+    assignmentPlacedCount: new Map(),
     classDaySubjectCount: new Map(),
     teacherDayCount: new Map(),
   }
@@ -1249,6 +1267,9 @@ export function* generateSchedule(
     }
   }
 
+  // 結果検証: weeklyCount を超過したエントリを除去（安全策）
+  bestResult.entries = validateAndFixEntries(bestResult.entries, assignmentMap)
+
   // 最終進捗
   yield {
     placed: bestResult.entries.filter((e) => !e.isConsecutiveSecond).length,
@@ -1259,6 +1280,35 @@ export function* generateSchedule(
   }
 
   return bestResult
+}
+
+/**
+ * 各割当の weeklyCount を超過したエントリを除去する。
+ * スケジューラ内部のバグで超過が発生した場合の安全策。
+ */
+function validateAndFixEntries(
+  entries: ScheduleEntry[],
+  assignmentMap: Map<string, Assignment>,
+): ScheduleEntry[] {
+  const countByAssignment = new Map<string, number>()
+  const validEntries: ScheduleEntry[] = []
+
+  for (const entry of entries) {
+    const assignment = assignmentMap.get(entry.assignmentId)
+    if (!assignment) {
+      validEntries.push(entry)
+      continue
+    }
+
+    const current = countByAssignment.get(entry.assignmentId) ?? 0
+    if (current < assignment.weeklyCount) {
+      countByAssignment.set(entry.assignmentId, current + 1)
+      validEntries.push(entry)
+    }
+    // weeklyCount を超えたエントリは静かに除去
+  }
+
+  return validEntries
 }
 
 // ============================================================

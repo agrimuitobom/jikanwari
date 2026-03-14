@@ -490,4 +490,83 @@ describe('scheduler', () => {
       expect(last).toHaveProperty('iterations')
     })
   })
+
+  describe('weeklyCount超過防止', () => {
+    it('同じ割当のエントリがweeklyCountを超えない', () => {
+      // 同じ教員が3クラス × 週2コマ = 6タスク（競合しやすい構成）
+      const teacher = makeTeacher({
+        availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] as DayOfWeek[],
+      })
+      const subject = makeSubject({ weeklyFrequency: 2 })
+
+      const a1 = makeAssignment({
+        classId: 'grade1-class1',
+        subjectId: subject.id,
+        teacherIds: [teacher.id],
+        weeklyCount: 2,
+      })
+      const a2 = makeAssignment({
+        classId: 'grade1-class2',
+        subjectId: subject.id,
+        teacherIds: [teacher.id],
+        weeklyCount: 2,
+      })
+      const a3 = makeAssignment({
+        classId: 'grade1-class3',
+        subjectId: subject.id,
+        teacherIds: [teacher.id],
+        weeklyCount: 2,
+      })
+
+      const result = runGenerator([teacher], [subject], [a1, a2, a3])
+
+      // 各割当のエントリ数がweeklyCountを超えていないことを確認
+      for (const assignment of [a1, a2, a3]) {
+        const count = result.entries.filter((e) => e.assignmentId === assignment.id).length
+        expect(count).toBeLessThanOrEqual(assignment.weeklyCount)
+      }
+    })
+
+    it('大規模ケースでもweeklyCount超過が発生しない', () => {
+      const classIds = [
+        'grade1-class1', 'grade1-class2', 'grade1-class3',
+        'grade2-class1', 'grade2-class2', 'grade2-class3',
+      ]
+
+      const teachers: Teacher[] = []
+      const subjects: Subject[] = []
+      const assignments: Assignment[] = []
+
+      // 3教科、各教科1名の教員（競合が発生しやすい構成）
+      const categories = ['数学', '英語', '国語'] as const
+      for (const cat of categories) {
+        const subj = makeSubject({ name: cat, category: cat, weeklyFrequency: 3 })
+        subjects.push(subj)
+        const t = makeTeacher({ name: `${cat}教員`, subjectIds: [subj.id] })
+        teachers.push(t)
+      }
+
+      // 各クラスに各科目を割当（同じ教員が6クラス担当 → 競合多発）
+      for (const classId of classIds) {
+        for (let si = 0; si < subjects.length; si++) {
+          assignments.push(
+            makeAssignment({
+              classId,
+              subjectId: subjects[si].id,
+              teacherIds: [teachers[si].id],
+              weeklyCount: 3,
+            }),
+          )
+        }
+      }
+
+      const result = runGenerator(teachers, subjects, assignments)
+
+      // 全割当についてweeklyCount超過がないことを確認
+      for (const assignment of assignments) {
+        const count = result.entries.filter((e) => e.assignmentId === assignment.id).length
+        expect(count).toBeLessThanOrEqual(assignment.weeklyCount)
+      }
+    })
+  })
 })
