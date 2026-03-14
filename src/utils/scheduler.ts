@@ -104,6 +104,14 @@ interface BoardState {
   teacherDayCount: Map<string, number>
 }
 
+/** 配置記録（修復フェーズでの追跡用） */
+interface PlacementRecord {
+  task: ScheduleTask
+  entries: ScheduleEntry[]
+  day: DayOfWeek
+  startPeriod: Period
+}
+
 // ============================================================
 // ユーティリティ
 // ============================================================
@@ -196,6 +204,18 @@ function shuffleArray<T>(arr: T[]): T[] {
     [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
   }
   return shuffled
+}
+
+/** 空のボード状態を作成 */
+function createEmptyState(): BoardState {
+  return {
+    classGrid: new Map(),
+    teacherGrid: new Map(),
+    entries: [],
+    assignmentPlacedCount: new Map(),
+    classDaySubjectCount: new Map(),
+    teacherDayCount: new Map(),
+  }
 }
 
 // ============================================================
@@ -520,31 +540,6 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
 }
 
 // ============================================================
-// 前方チェック（Forward Checking）
-// ============================================================
-
-/**
- * 配置後に、未配置の各タスクの候補スロット数をカウントし、
- * いずれかのタスクの候補が0になる場合は false を返す。
- * 計算コストが高いため、残りタスクの一部のみチェックする。
- */
-function forwardCheck(
-  remainingTasks: ScheduleTask[],
-  state: BoardState,
-  maxCheckCount: number,
-): boolean {
-  // 残りタスクのうち、先頭から maxCheckCount 個だけチェック
-  const checkCount = Math.min(remainingTasks.length, maxCheckCount)
-  for (let i = 0; i < checkCount; i++) {
-    const task = remainingTasks[i]
-    if (task.fixedSlot) continue // 固定スロットは別途チェック済み
-    const candidates = getCandidateSlots(task, state)
-    if (candidates.length === 0) return false
-  }
-  return true
-}
-
-// ============================================================
 // MRV（最小残余値）ヒューリスティック
 // ============================================================
 
@@ -845,339 +840,285 @@ function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask[]
 }
 
 // ============================================================
-// メイン: バックトラッキングスケジューラ（ジェネレータ）
-// MRV + Forward Checking + ランダムリスタート対応
+// 貪欲配置（Greedy Placement）
 // ============================================================
 
-/** 1回のバックトラッキング探索を実行する内部ジェネレータ */
-function* singleSearch(
-  allTasks: ScheduleTask[],
-  totalTasks: number,
-  subjectMap: Map<string, Subject>,
-  assignmentMap: Map<string, Assignment>,
-  teacherMap: Map<string, Teacher>,
+/**
+ * タスクを順番に貪欲配置する。
+ * MRV使用時は、残りタスクの中から候補スロットが最も少ないものを動的に選択する。
+ * @param randomTopK - 候補スロットの上位N件からランダムに選択（1=常にベスト、>1=ランダム性あり）
+ * @returns 配置できなかったタスクの配列
+ */
+function greedyPlace(
+  tasks: ScheduleTask[],
+  state: BoardState,
   maxTeacherPerDay: number,
-  maxIter: number,
-  iterationOffset: number,
-  restartIndex: number,
   useMRV: boolean,
-): Generator<SchedulerProgress, { result: SchedulerResult; iterations: number }, undefined> {
-  // ボード初期化
-  const state: BoardState = {
-    classGrid: new Map(),
-    teacherGrid: new Map(),
-    entries: [],
-    assignmentPlacedCount: new Map(),
-    classDaySubjectCount: new Map(),
-    teacherDayCount: new Map(),
-  }
+  placementMap: Map<string, PlacementRecord>,
+  randomTopK: number = 1,
+): ScheduleTask[] {
+  const unplaced: ScheduleTask[] = []
 
-  let bestResult: SchedulerResult = {
-    entries: [],
-    score: -1,
-    isComplete: false,
-    unplacedTasks: [],
-  }
-  let iterations = 0
+  if (useMRV && tasks.length > 1) {
+    const remaining = [...tasks]
+    while (remaining.length > 0) {
+      const { index, candidates } = selectNextTaskMRV(remaining, state)
+      const task = remaining.splice(index, 1)[0]
 
-  // 前方チェックの上限（残りタスク数の先頭N個のみ。パフォーマンスのため制限）
-  const FC_CHECK_LIMIT = 8
-
-  /** 部分解がベストより良いかを判定（配置数優先、同数ならスコア比較） */
-  function isBetterResult(newEntries: ScheduleEntry[], newScore: number): boolean {
-    const newPlaced = newEntries.filter(e => !e.isConsecutiveSecond).length
-    const bestPlaced = bestResult.entries.filter(e => !e.isConsecutiveSecond).length
-    if (newPlaced !== bestPlaced) return newPlaced > bestPlaced
-    return newScore > bestResult.score
-  }
-
-  // MRV方式: スタックに「残りタスクリスト」を持つ
-  type MRVStackFrame = {
-    remainingTasks: ScheduleTask[]
-    chosenTask: ScheduleTask | null
-    candidateIndex: number
-    candidates: Slot[]
-    placedEntries: ScheduleEntry[] | null
-    /** 前方チェックを無効にして再試行中か */
-    skipFC: boolean
-  }
-
-  // 通常方式: 既存の固定順序ベース
-  type FixedStackFrame = {
-    taskIndex: number
-    candidateIndex: number
-    placedEntries: ScheduleEntry[] | null
-    candidates: Slot[] | null
-    /** 前方チェックを無効にして再試行中か */
-    skipFC: boolean
-  }
-
-  if (useMRV) {
-    // ---- MRV方式 ----
-    const initialRemaining = [...allTasks]
-    const stack: MRVStackFrame[] = [{
-      remainingTasks: initialRemaining,
-      chosenTask: null,
-      candidateIndex: 0,
-      candidates: [],
-      placedEntries: null,
-      skipFC: false,
-    }]
-
-    while (stack.length > 0) {
-      iterations++
-      if (iterations >= maxIter) break
-
-      // 進捗を定期的に yield
-      if (iterations % 500 === 0) {
-        yield {
-          placed: state.entries.filter((e) => !e.isConsecutiveSecond).length,
-          total: totalTasks,
-          bestScore: bestResult.score,
-          iterations: iterationOffset + iterations,
-          restarts: restartIndex,
-        }
-      }
-
-      const frame = stack[stack.length - 1]
-
-      // 全タスク配置完了
-      if (frame.remainingTasks.length === 0 && frame.chosenTask === null) {
-        const score = calculateScore(state.entries, [], totalTasks, subjectMap, assignmentMap, teacherMap, maxTeacherPerDay)
-        if (score > bestResult.score) {
-          bestResult = {
-            entries: [...state.entries],
-            score,
-            isComplete: true,
-            unplacedTasks: [],
-          }
-        }
-        stack.pop()
-        break // 完全解発見
-      }
-
-      // 初回: MRVでタスクを選択
-      if (frame.chosenTask === null) {
-        const { index, candidates } = selectNextTaskMRV(frame.remainingTasks, state)
-        frame.chosenTask = frame.remainingTasks[index]
-        // remainingTasks から選択したタスクを除外
-        frame.remainingTasks = [
-          ...frame.remainingTasks.slice(0, index),
-          ...frame.remainingTasks.slice(index + 1),
-        ]
-        // 候補をスコア順にソート
+      if (candidates.length > 0) {
+        // スコア順にソートし、上位からランダムに選択
         candidates.sort((a, b) =>
-          scoreCandidateSlot(frame.chosenTask!, b, state, maxTeacherPerDay) -
-          scoreCandidateSlot(frame.chosenTask!, a, state, maxTeacherPerDay)
+          scoreCandidateSlot(task, b, state, maxTeacherPerDay) -
+          scoreCandidateSlot(task, a, state, maxTeacherPerDay)
         )
-        frame.candidates = candidates
-        frame.candidateIndex = 0
-      }
-
-      const task = frame.chosenTask
-
-      // 前回配置したエントリをバックトラック解除
-      if (frame.placedEntries !== null) {
-        removeEntries(task, state, frame.placedEntries)
-        frame.placedEntries = null
-      }
-
-      // 次の候補を試す
-      if (frame.candidateIndex >= frame.candidates.length) {
-        // FCが有効で全候補を拒否した場合、FCなしで再試行
-        if (!frame.skipFC && frame.candidates.length > 0) {
-          frame.candidateIndex = 0
-          frame.skipFC = true
-          continue
+        const topN = Math.min(candidates.length, randomTopK)
+        const chosen = candidates[Math.floor(Math.random() * topN)]
+        const entries = placeTask(task, state, chosen.day, chosen.period)
+        const record: PlacementRecord = { task, entries, day: chosen.day, startPeriod: chosen.period }
+        for (const e of entries) {
+          placementMap.set(cellKey(e.day, e.period, e.classId), record)
         }
-
-        // 全候補を試し終わった → バックトラック
-
-        // 部分解を評価
-        const remainingForScore = [task, ...frame.remainingTasks]
-        const partialScore = calculateScore(
-          state.entries,
-          remainingForScore,
-          totalTasks,
-          subjectMap, assignmentMap, teacherMap, maxTeacherPerDay,
-        )
-        if (isBetterResult(state.entries, partialScore)) {
-          const unplaced = remainingForScore.flatMap((t) => diagnoseUnplaced(t, state))
-          bestResult = {
-            entries: [...state.entries],
-            score: partialScore,
-            isComplete: false,
-            unplacedTasks: unplaced,
-          }
-        }
-
-        stack.pop()
-        continue
+      } else {
+        unplaced.push(task)
       }
-
-      const slot = frame.candidates[frame.candidateIndex]
-      frame.candidateIndex++
-
-      // 再チェック（状態が変わっている可能性）
-      const canPlaceNow = task.isConsecutive
-        ? canPlaceTask(task, state, slot.day, slot.period) &&
-          canPlaceTask(task, state, slot.day, (slot.period + 1) as Period)
-        : canPlaceTask(task, state, slot.day, slot.period)
-
-      if (!canPlaceNow) continue
-
-      // 配置実行
-      const placed = placeTask(task, state, slot.day, slot.period)
-      frame.placedEntries = placed
-
-      // 前方チェック: この配置で他のタスクが詰まないか確認（skipFC時はスキップ）
-      if (!frame.skipFC && frame.remainingTasks.length > 0) {
-        if (!forwardCheck(frame.remainingTasks, state, FC_CHECK_LIMIT)) {
-          // この配置では他のタスクが配置不能になる → 次の候補へ
-          removeEntries(task, state, placed)
-          frame.placedEntries = null
-          continue
-        }
-      }
-
-      // 次のタスクへ（残りタスクリストを渡す）
-      stack.push({
-        remainingTasks: [...frame.remainingTasks],
-        chosenTask: null,
-        candidateIndex: 0,
-        candidates: [],
-        placedEntries: null,
-        skipFC: false,
-      })
     }
   } else {
-    // ---- 固定順序方式（従来型 + Forward Checking追加） ----
-    const stack: FixedStackFrame[] = [{ taskIndex: 0, candidateIndex: 0, placedEntries: null, candidates: null, skipFC: false }]
-
-    while (stack.length > 0) {
-      iterations++
-      if (iterations >= maxIter) break
-
-      if (iterations % 500 === 0) {
-        yield {
-          placed: state.entries.filter((e) => !e.isConsecutiveSecond).length,
-          total: totalTasks,
-          bestScore: bestResult.score,
-          iterations: iterationOffset + iterations,
-          restarts: restartIndex,
-        }
-      }
-
-      const frame = stack[stack.length - 1]
-
-      // 全タスク配置完了
-      if (frame.taskIndex >= totalTasks) {
-        const score = calculateScore(state.entries, [], totalTasks, subjectMap, assignmentMap, teacherMap, maxTeacherPerDay)
-        if (score > bestResult.score) {
-          bestResult = {
-            entries: [...state.entries],
-            score,
-            isComplete: true,
-            unplacedTasks: [],
-          }
-        }
-        stack.pop()
-        break
-      }
-
-      const task = allTasks[frame.taskIndex]
-
-      // このタスクの候補スロットを取得（初回のみ計算）
-      if (frame.candidates === null) {
-        const raw = getCandidateSlots(task, state)
-        raw.sort((a, b) => scoreCandidateSlot(task, b, state, maxTeacherPerDay) - scoreCandidateSlot(task, a, state, maxTeacherPerDay))
-        frame.candidates = raw
-      }
-      const candidates = frame.candidates
-
-      // 前回配置したエントリをバックトラック解除
-      if (frame.placedEntries !== null) {
-        removeEntries(task, state, frame.placedEntries)
-        frame.placedEntries = null
-      }
-
-      // 次の候補を試す
-      if (frame.candidateIndex >= candidates.length) {
-        // FCが有効で全候補を拒否した場合、FCなしで再試行
-        if (!frame.skipFC && candidates.length > 0) {
-          frame.candidateIndex = 0
-          frame.skipFC = true
-          continue
-        }
-
-        // 全候補を試し終わった → バックトラック
-        frame.candidates = null
-
-        const partialScore = calculateScore(
-          state.entries,
-          allTasks.slice(frame.taskIndex),
-          totalTasks,
-          subjectMap, assignmentMap, teacherMap, maxTeacherPerDay,
+    for (const task of tasks) {
+      const candidates = getCandidateSlots(task, state)
+      if (candidates.length > 0) {
+        candidates.sort((a, b) =>
+          scoreCandidateSlot(task, b, state, maxTeacherPerDay) -
+          scoreCandidateSlot(task, a, state, maxTeacherPerDay)
         )
-        if (isBetterResult(state.entries, partialScore)) {
-          const unplaced = allTasks.slice(frame.taskIndex).flatMap((t) =>
-            diagnoseUnplaced(t, state),
-          )
-          bestResult = {
-            entries: [...state.entries],
-            score: partialScore,
-            isComplete: false,
-            unplacedTasks: unplaced,
-          }
+        const topN = Math.min(candidates.length, randomTopK)
+        const chosen = candidates[Math.floor(Math.random() * topN)]
+        const entries = placeTask(task, state, chosen.day, chosen.period)
+        const record: PlacementRecord = { task, entries, day: chosen.day, startPeriod: chosen.period }
+        for (const e of entries) {
+          placementMap.set(cellKey(e.day, e.period, e.classId), record)
         }
-
-        stack.pop()
-        continue
+      } else {
+        unplaced.push(task)
       }
-
-      const slot = candidates[frame.candidateIndex]
-      frame.candidateIndex++
-
-      const canPlaceNow = task.isConsecutive
-        ? canPlaceTask(task, state, slot.day, slot.period) &&
-          canPlaceTask(task, state, slot.day, (slot.period + 1) as Period)
-        : canPlaceTask(task, state, slot.day, slot.period)
-
-      if (!canPlaceNow) continue
-
-      // 配置実行
-      const placed = placeTask(task, state, slot.day, slot.period)
-      frame.placedEntries = placed
-
-      // 前方チェック（skipFC時はスキップ）
-      if (!frame.skipFC) {
-        const remainingCount = totalTasks - frame.taskIndex - 1
-        if (remainingCount > 0) {
-          const remainingTasks = allTasks.slice(frame.taskIndex + 1)
-          if (!forwardCheck(remainingTasks, state, FC_CHECK_LIMIT)) {
-            removeEntries(task, state, placed)
-            frame.placedEntries = null
-            continue
-          }
-        }
-      }
-
-      // 次のタスクへ
-      stack.push({ taskIndex: frame.taskIndex + 1, candidateIndex: 0, placedEntries: null, candidates: null, skipFC: false })
     }
   }
 
-  // 最終進捗
-  yield {
-    placed: bestResult.entries.filter((e) => !e.isConsecutiveSecond).length,
-    total: totalTasks,
-    bestScore: bestResult.score,
-    iterations: iterationOffset + iterations,
-    restarts: restartIndex,
+  return unplaced
+}
+
+// ============================================================
+// ローカル修復（Local Repair by Displacement）
+// ============================================================
+
+/**
+ * 未配置タスクを1つずつ、ブロッカーを別のスロットに移動して配置を試みる。
+ * 単一レベルの置換のみ行う（チェーン置換はしない）。
+ */
+function repairPhase(
+  unplacedTasks: ScheduleTask[],
+  state: BoardState,
+  assignmentMap: Map<string, Assignment>,
+  maxTeacherPerDay: number,
+  placementMap: Map<string, PlacementRecord>,
+): ScheduleTask[] {
+  const stillUnplaced: ScheduleTask[] = []
+
+  for (const task of unplacedTasks) {
+    if (tryRepairTask(task, state, assignmentMap, maxTeacherPerDay, placementMap)) {
+      // 修復成功
+    } else {
+      stillUnplaced.push(task)
+    }
   }
 
-  return { result: bestResult, iterations }
+  return stillUnplaced
 }
+
+/**
+ * 1つのタスクの修復を試みる。
+ * 1. まず直接配置を試みる（前のパスでスキップされたタスクにより空きができた可能性）
+ * 2. 各スロットについて、ブロッカーを移動して空きを作る
+ */
+function tryRepairTask(
+  task: ScheduleTask,
+  state: BoardState,
+  assignmentMap: Map<string, Assignment>,
+  maxTeacherPerDay: number,
+  placementMap: Map<string, PlacementRecord>,
+): boolean {
+  // まず直接配置を試みる
+  const candidates = getCandidateSlots(task, state)
+  if (candidates.length > 0) {
+    candidates.sort((a, b) =>
+      scoreCandidateSlot(task, b, state, maxTeacherPerDay) -
+      scoreCandidateSlot(task, a, state, maxTeacherPerDay)
+    )
+    const best = candidates[0]
+    const entries = placeTask(task, state, best.day, best.period)
+    const record: PlacementRecord = { task, entries, day: best.day, startPeriod: best.period }
+    for (const e of entries) {
+      placementMap.set(cellKey(e.day, e.period, e.classId), record)
+    }
+    return true
+  }
+
+  // 各スロットで置換を試みる
+  for (const day of DAYS) {
+    const periods = task.isConsecutive ? CONSECUTIVE_STARTS : PERIODS
+    for (const period of periods) {
+      const checkPeriods: Period[] = task.isConsecutive
+        ? [period, (period + 1) as Period]
+        : [period]
+
+      // 置換不可能なハード制約をチェック（教員の勤務日外、除外時限など）
+      let hardBlock = false
+      for (let i = 0; i < task.assignments.length && !hardBlock; i++) {
+        const a = task.assignments[i]
+        const s = task.subjects[i]
+        const ts = task.teacherGroups[i]
+
+        // weeklyCount超過
+        const pc = state.assignmentPlacedCount.get(a.id) ?? 0
+        if (pc >= a.weeklyCount) { hardBlock = true; break }
+
+        for (const p of checkPeriods) {
+          // 科目の配置不可時限
+          if (isExcludedPeriodForSubject(s, p)) { hardBlock = true; break }
+          // 同日同科目禁止（ただしブロッカー除去後に解消する可能性があるのでスキップ）
+          // noConsecutive（隣接チェックもブロッカー除去後に変わりうるのでスキップ）
+          // 教員の勤務日外（置換不可能）
+          for (const t of ts) {
+            if (!isTeacherAvailable(t, day, p)) { hardBlock = true; break }
+          }
+          if (hardBlock) break
+        }
+      }
+      if (hardBlock) continue
+
+      // ブロッカーとなっている配置記録を収集
+      const blockerRecords = new Set<PlacementRecord>()
+      let blockerHardBlock = false
+
+      for (let i = 0; i < task.assignments.length && !blockerHardBlock; i++) {
+        const a = task.assignments[i]
+        const ts = task.teacherGroups[i]
+
+        for (const p of checkPeriods) {
+          // クラス競合
+          if (!isSlotFreeForClass(state, day, p, a.classId)) {
+            const rec = placementMap.get(cellKey(day, p, a.classId))
+            if (rec) {
+              if (rec.task.fixedSlot) { blockerHardBlock = true; break }
+              blockerRecords.add(rec)
+            }
+          }
+          // 教員競合
+          for (const t of ts) {
+            if (!isSlotFreeForTeacher(state, day, p, t.id)) {
+              const blockAId = state.teacherGrid.get(cellKey(day, p, t.id))
+              if (blockAId) {
+                const blockAssignment = assignmentMap.get(blockAId)
+                if (blockAssignment) {
+                  const rec = placementMap.get(cellKey(day, p, blockAssignment.classId))
+                  if (rec) {
+                    if (rec.task.fixedSlot) { blockerHardBlock = true; break }
+                    blockerRecords.add(rec)
+                  }
+                }
+              }
+            }
+          }
+          if (blockerHardBlock) break
+        }
+      }
+
+      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > 2) continue
+
+      // ブロッカーを除去して置換を試みる
+      const blockerList = [...blockerRecords]
+
+      // 全ブロッカーを除去
+      for (const rec of blockerList) {
+        removeEntries(rec.task, state, rec.entries)
+        for (const e of rec.entries) {
+          placementMap.delete(cellKey(e.day, e.period, e.classId))
+        }
+      }
+
+      // タスクを配置可能か確認
+      const canNow = task.isConsecutive
+        ? canPlaceTask(task, state, day, period) && canPlaceTask(task, state, day, (period + 1) as Period)
+        : canPlaceTask(task, state, day, period)
+
+      if (canNow) {
+        const ourEntries = placeTask(task, state, day, period)
+        const ourRecord: PlacementRecord = { task, entries: ourEntries, day, startPeriod: period }
+        for (const e of ourEntries) {
+          placementMap.set(cellKey(e.day, e.period, e.classId), ourRecord)
+        }
+
+        // ブロッカーを別のスロットに再配置
+        let allReplaced = true
+        const replacedRecords: PlacementRecord[] = []
+
+        for (const rec of blockerList) {
+          const btCandidates = getCandidateSlots(rec.task, state)
+          if (btCandidates.length > 0) {
+            btCandidates.sort((a, b) =>
+              scoreCandidateSlot(rec.task, b, state, maxTeacherPerDay) -
+              scoreCandidateSlot(rec.task, a, state, maxTeacherPerDay)
+            )
+            const re = placeTask(rec.task, state, btCandidates[0].day, btCandidates[0].period)
+            const newRec: PlacementRecord = {
+              task: rec.task, entries: re,
+              day: btCandidates[0].day, startPeriod: btCandidates[0].period,
+            }
+            for (const e of re) {
+              placementMap.set(cellKey(e.day, e.period, e.classId), newRec)
+            }
+            replacedRecords.push(newRec)
+          } else {
+            allReplaced = false
+            break
+          }
+        }
+
+        if (allReplaced) {
+          return true // 修復成功
+        }
+
+        // 失敗: 全てを元に戻す
+        // 再配置したブロッカーを除去
+        for (const rec of replacedRecords) {
+          removeEntries(rec.task, state, rec.entries)
+          for (const e of rec.entries) {
+            placementMap.delete(cellKey(e.day, e.period, e.classId))
+          }
+        }
+        // 自タスクを除去
+        removeEntries(task, state, ourEntries)
+        for (const e of ourEntries) {
+          placementMap.delete(cellKey(e.day, e.period, e.classId))
+        }
+      }
+
+      // ブロッカーを元の位置に復元
+      for (const rec of blockerList) {
+        const re = placeTask(rec.task, state, rec.day, rec.startPeriod)
+        const restoredRec: PlacementRecord = { task: rec.task, entries: re, day: rec.day, startPeriod: rec.startPeriod }
+        for (const e of re) {
+          placementMap.set(cellKey(e.day, e.period, e.classId), restoredRec)
+        }
+      }
+    }
+  }
+
+  return false
+}
+
+// ============================================================
+// メイン: 貪欲配置 + ローカル修復スケジューラ（ジェネレータ）
+// ============================================================
 
 /** ジェネレータベースのスケジューラ。yield で進捗を返す。 */
 export function* generateSchedule(
@@ -1189,6 +1130,7 @@ export function* generateSchedule(
   const maxTeacherPerDay = options?.maxTeacherPeriodsPerDay ?? DEFAULT_MAX_TEACHER_PERIODS_PER_DAY
   const maxIter = options?.maxIterations ?? 200_000
   const maxRestarts = options?.maxRestarts ?? 10
+
   // マップ構築
   const teacherMap = new Map(teachers.map((t) => [t.id, t]))
   const subjectMap = new Map(subjects.map((s) => [s.id, s]))
@@ -1207,63 +1149,85 @@ export function* generateSchedule(
     }
   }
 
-  // 各リスタートに割り当てるイテレーション数
-  const totalRounds = 1 + maxRestarts // 初回 + リスタート回数
-  const iterPerRound = Math.floor(maxIter / totalRounds)
+  // パス数を決定: maxIterations から換算（各パスは O(totalTasks^2) 程度の仕事量）
+  const workPerPass = Math.max(totalTasks * 2, 10)
+  const totalPasses = Math.min(
+    3000,
+    Math.max(1 + maxRestarts, Math.floor(maxIter / workPerPass)),
+  )
+
+  // 固定/非固定タスクを分離
+  const fixedTasks = allTasks.filter((t) => t.fixedSlot)
+  const nonFixedTasks = allTasks.filter((t) => !t.fixedSlot)
 
   let bestResult: SchedulerResult = {
     entries: [],
-    score: 0,
+    score: -1,
     isComplete: false,
     unplacedTasks: [],
   }
-  let totalIterations = 0
 
-  for (let restart = 0; restart < totalRounds; restart++) {
+  for (let pass = 0; pass < totalPasses; pass++) {
     // 完全解が見つかっていれば終了
     if (bestResult.isComplete) break
 
+    // ボード状態を初期化
+    const state = createEmptyState()
+    const placementMap = new Map<string, PlacementRecord>()
+
     // タスク順序の決定
-    let tasksForThisRound: ScheduleTask[]
-    if (restart === 0) {
-      // 初回: 優先度順（従来通り）
-      tasksForThisRound = [...allTasks]
+    let tasks: ScheduleTask[]
+    if (pass === 0) {
+      // 初回: 優先度順（制約が厳しいものから）
+      tasks = [...allTasks]
     } else {
-      // リスタート: 固定スロットタスクを先頭に保ち、残りをシャッフル
-      const fixed = allTasks.filter((t) => t.fixedSlot)
-      const nonFixed = allTasks.filter((t) => !t.fixedSlot)
-      tasksForThisRound = [...fixed, ...shuffleArray(nonFixed)]
+      // リスタート: 固定スロットを先頭に保ち、残りをシャッフル
+      tasks = [...fixedTasks, ...shuffleArray(nonFixedTasks)]
     }
 
-    // MRV方式は2回目以降のリスタートで使用（初回は従来方式で安定した解を得る）
-    const useMRV = restart > 0
+    // ランダム性の制御: パスによって上位N件から選択
+    const randomTopK = pass === 0 ? 1 : (pass % 3 === 0 ? 1 : 3)
 
-    const gen = singleSearch(
-      tasksForThisRound,
-      totalTasks,
-      subjectMap,
-      assignmentMap,
-      teacherMap,
-      maxTeacherPerDay,
-      iterPerRound,
-      totalIterations,
-      restart,
-      useMRV,
+    // MRV方式は2回目以降で使用（初回は優先度順で安定した解を得る）
+    const useMRV = pass > 0
+
+    // フェーズ1: 貪欲配置
+    const unplaced1 = greedyPlace(tasks, state, maxTeacherPerDay, useMRV, placementMap, randomTopK)
+
+    // フェーズ2: 未配置タスクを再度MRVで配置試行（他のタスクのスキップで空きができた可能性）
+    const unplaced2 = greedyPlace(unplaced1, state, maxTeacherPerDay, true, placementMap, 1)
+
+    // フェーズ3: ローカル修復（ブロッカーの移動で空きを作る）
+    const finalUnplaced = repairPhase(unplaced2, state, assignmentMap, maxTeacherPerDay, placementMap)
+
+    // スコア計算
+    const score = calculateScore(
+      state.entries, finalUnplaced, totalTasks,
+      subjectMap, assignmentMap, teacherMap, maxTeacherPerDay,
     )
 
-    let searchResult = gen.next()
-    while (!searchResult.done) {
-      // singleSearch からの進捗をそのまま上位に yield
-      yield searchResult.value as SchedulerProgress
-      searchResult = gen.next()
+    // ベスト解の更新（配置数優先、同数ならスコア比較）
+    const placedCount = state.entries.filter((e) => !e.isConsecutiveSecond).length
+    const bestPlacedCount = bestResult.entries.filter((e) => !e.isConsecutiveSecond).length
+
+    if (placedCount > bestPlacedCount || (placedCount === bestPlacedCount && score > bestResult.score)) {
+      bestResult = {
+        entries: [...state.entries],
+        score,
+        isComplete: finalUnplaced.length === 0,
+        unplacedTasks: finalUnplaced.flatMap((t) => diagnoseUnplaced(t, state)),
+      }
     }
 
-    const { result, iterations } = searchResult.value
-    totalIterations += iterations
-
-    // より良い解なら更新
-    if (result.score > bestResult.score) {
-      bestResult = result
+    // 進捗を定期的に yield
+    if (pass % 20 === 0 || pass === totalPasses - 1) {
+      yield {
+        placed: bestResult.entries.filter((e) => !e.isConsecutiveSecond).length,
+        total: totalTasks,
+        bestScore: bestResult.score,
+        iterations: pass + 1,
+        restarts: pass,
+      }
     }
   }
 
@@ -1275,8 +1239,8 @@ export function* generateSchedule(
     placed: bestResult.entries.filter((e) => !e.isConsecutiveSecond).length,
     total: totalTasks,
     bestScore: bestResult.score,
-    iterations: totalIterations,
-    restarts: totalRounds - 1,
+    iterations: totalPasses,
+    restarts: totalPasses - 1,
   }
 
   return bestResult
