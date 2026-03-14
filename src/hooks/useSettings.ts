@@ -7,6 +7,8 @@ export interface AppSettings {
   maxTeacherPeriodsPerDay: number
   /** スケジューラ最大探索回数 */
   maxIterations: number
+  /** ランダムリスタート回数 */
+  maxRestarts: number
 }
 
 const STORAGE_KEY = 'jikanwari-settings'
@@ -14,7 +16,8 @@ const STORAGE_KEY = 'jikanwari-settings'
 const DEFAULT_SETTINGS: AppSettings = {
   classesPerGrade: 3,
   maxTeacherPeriodsPerDay: 5,
-  maxIterations: 50000,
+  maxIterations: 200000,
+  maxRestarts: 10,
 }
 
 function loadSettings(): AppSettings {
