@@ -1,8 +1,13 @@
 import { useState } from 'react'
-import type { Assignment, Teacher, Subject, CreateInput } from '../../types'
+import type { Assignment, Teacher, Subject, CreateInput, TimeSlot, DayOfWeek, Period } from '../../types'
 import { ErrorAlert } from '../common/ErrorAlert'
-import { CLASS_OPTIONS, SUBJECT_CATEGORIES } from '../../utils/constants'
+import { CLASS_OPTIONS, SUBJECT_CATEGORIES, DAYS, DAY_LABELS, PERIODS } from '../../utils/constants'
 import type { ClassOption } from '../../utils/constants'
+
+interface FixedSlotEntry {
+  day: DayOfWeek | ''
+  period: Period | ''
+}
 
 interface FormState {
   classIds: string[]
@@ -11,6 +16,7 @@ interface FormState {
   weeklyCount: number
   isSimultaneous: boolean
   simultaneousGroupId: string
+  fixedSlots: FixedSlotEntry[]
   notes: string
 }
 
@@ -44,6 +50,7 @@ export function AssignmentForm({
     weeklyCount: initialValues?.weeklyCount ?? 2,
     isSimultaneous: !!initialValues?.simultaneousGroupId,
     simultaneousGroupId: initialValues?.simultaneousGroupId ?? '',
+    fixedSlots: initialValues?.fixedSlots?.map((s) => ({ day: s.day, period: s.period })) ?? [],
     notes: initialValues?.notes ?? '',
   })
   const [submitting, setSubmitting] = useState(false)
@@ -142,12 +149,17 @@ export function AssignmentForm({
         }
       }
 
+      // 有効な固定スロットを抽出
+      const validFixedSlots: TimeSlot[] = form.fixedSlots
+        .filter((s): s is { day: DayOfWeek; period: Period } => s.day !== '' && s.period !== '')
+
       const inputs: CreateInput<Assignment>[] = form.classIds.map((classId) => ({
         classId,
         subjectId: form.subjectId,
         teacherIds: form.teacherIds,
         weeklyCount: form.weeklyCount,
         ...(groupId ? { simultaneousGroupId: groupId } : {}),
+        ...(validFixedSlots.length > 0 ? { fixedSlots: validFixedSlots } : {}),
         ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
       }))
       await onSubmit(inputs)
@@ -513,7 +525,96 @@ export function AssignmentForm({
         )}
       </section>
 
-      {/* ── セクション 5: 備考 ── */}
+      {/* ── セクション 5: 固定時間 ── */}
+      <section className="space-y-3">
+        <div className="flex items-baseline justify-between">
+          <h3 className="section-heading mb-0">固定時間</h3>
+          <button
+            type="button"
+            onClick={() =>
+              setForm((p) => ({
+                ...p,
+                fixedSlots: [...p.fixedSlots, { day: '', period: '' }],
+              }))
+            }
+            className="text-xs text-primary-600 hover:text-primary-800"
+          >
+            + 追加
+          </button>
+        </div>
+
+        <p className="text-xs text-gray-500">
+          この曜日・時限に必ず配置する場合に指定してください（例: ホームルーム → 木曜6限）
+        </p>
+
+        {form.fixedSlots.length === 0 ? (
+          <p className="text-xs text-gray-400">指定なし（スケジューラが自動配置）</p>
+        ) : (
+          <div className="space-y-2">
+            {form.fixedSlots.map((slot, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <select
+                  value={slot.day}
+                  onChange={(e) =>
+                    setForm((p) => {
+                      const next = [...p.fixedSlots]
+                      next[idx] = { ...next[idx], day: e.target.value as DayOfWeek | '' }
+                      return { ...p, fixedSlots: next }
+                    })
+                  }
+                  className="form-select w-28"
+                >
+                  <option value="">曜日</option>
+                  {DAYS.map((d) => (
+                    <option key={d} value={d}>{DAY_LABELS[d]}曜日</option>
+                  ))}
+                </select>
+
+                <select
+                  value={slot.period}
+                  onChange={(e) =>
+                    setForm((p) => {
+                      const next = [...p.fixedSlots]
+                      next[idx] = { ...next[idx], period: e.target.value === '' ? '' : (Number(e.target.value) as Period) }
+                      return { ...p, fixedSlots: next }
+                    })
+                  }
+                  className="form-select w-24"
+                >
+                  <option value="">時限</option>
+                  {PERIODS.map((p) => (
+                    <option key={p} value={p}>{p}限</option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setForm((p) => ({
+                      ...p,
+                      fixedSlots: p.fixedSlots.filter((_, i) => i !== idx),
+                    }))
+                  }
+                  className="text-gray-400 hover:text-red-500"
+                  title="削除"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                    <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {form.fixedSlots.length > 0 && form.fixedSlots.length > form.weeklyCount && (
+          <p className="text-xs text-amber-600">
+            固定時間の数（{form.fixedSlots.length}）が週コマ数（{form.weeklyCount}）を超えています
+          </p>
+        )}
+      </section>
+
+      {/* ── セクション 6: 備考 ── */}
       <section>
         <h3 className="section-heading">備考</h3>
         <textarea

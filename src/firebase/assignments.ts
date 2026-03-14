@@ -14,7 +14,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from './config'
-import { COLLECTION, type Assignment, type CreateInput, type UpdateInput } from '../types'
+import { COLLECTION, type Assignment, type CreateInput, type UpdateInput, type TimeSlot } from '../types'
 
 // ============================================================
 // バリデーション
@@ -110,6 +110,9 @@ function docToAssignment(snap: QueryDocumentSnapshot): Assignment {
     teacherIds: (d.teacherIds ?? []) as string[],
     weeklyCount: d.weeklyCount as number,
     ...(d.simultaneousGroupId ? { simultaneousGroupId: d.simultaneousGroupId as string } : {}),
+    ...(d.fixedSlots && Array.isArray(d.fixedSlots) && d.fixedSlots.length > 0
+      ? { fixedSlots: d.fixedSlots as TimeSlot[] }
+      : {}),
     ...(d.notes !== undefined ? { notes: d.notes as string } : {}),
     createdAt: (d.createdAt as Timestamp).toDate(),
     updatedAt: (d.updatedAt as Timestamp).toDate(),
@@ -138,6 +141,7 @@ export async function addAssignment(input: CreateInput<Assignment>): Promise<Ass
     teacherIds: input.teacherIds,
     weeklyCount: input.weeklyCount,
     ...(input.simultaneousGroupId ? { simultaneousGroupId: input.simultaneousGroupId } : {}),
+    ...(input.fixedSlots && input.fixedSlots.length > 0 ? { fixedSlots: input.fixedSlots } : {}),
     ...(input.notes !== undefined ? { notes: input.notes } : {}),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
