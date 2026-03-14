@@ -173,6 +173,16 @@ export interface Assignment {
    * クラス固有の事情で上書き可能（例: 選択科目で単位数が異なる場合）。
    */
   weeklyCount: number
+  /**
+   * 同時開講グループID。
+   * 同じグループIDを持つ割当は、時間割上で同じ曜日・同じ時限に配置される。
+   *
+   * 例1: 体育2年 → 2-1, 2-2, 2-3 を同時開講し4名の教員で担当
+   * 例2: 英語C2（進学コース）→ 各クラスの別科目と同じ時限に配置
+   *
+   * 未設定（undefined）の場合は通常の個別配置。
+   */
+  simultaneousGroupId?: string
   /** 備考（特記事項など） */
   notes?: string
   createdAt: Date

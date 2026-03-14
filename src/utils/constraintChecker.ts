@@ -126,6 +126,77 @@ export function detectConstraintConflicts(
     }
   }
 
+  // 同時開講グループの整合性チェック
+  const simultaneousGroups = new Map<string, Assignment[]>()
+  for (const assignment of assignments) {
+    if (!assignment.simultaneousGroupId) continue
+    const group = simultaneousGroups.get(assignment.simultaneousGroupId)
+    if (group) {
+      group.push(assignment)
+    } else {
+      simultaneousGroups.set(assignment.simultaneousGroupId, [assignment])
+    }
+  }
+
+  for (const [, groupAssignments] of simultaneousGroups) {
+    // 週コマ数が一致しているかチェック
+    const weeklyCounts = new Set(groupAssignments.map((a) => a.weeklyCount))
+    if (weeklyCounts.size > 1) {
+      const counts = groupAssignments.map((a) => {
+        const cls = a.classId
+        return `${cls}=${a.weeklyCount}コマ`
+      }).join('、')
+      for (const a of groupAssignments) {
+        warnings.push({
+          severity: 'error',
+          assignmentId: a.id,
+          message: `同時開講グループ内で週コマ数が一致しません（${counts}）`,
+        })
+      }
+    }
+
+    // 全教員の共通勤務日を確認
+    const allTeacherIds = new Set(groupAssignments.flatMap((a) => a.teacherIds))
+    const allGroupTeachers = Array.from(allTeacherIds)
+      .map((id) => teacherMap.get(id))
+      .filter((t): t is Teacher => t !== undefined)
+
+    if (allGroupTeachers.length > 0) {
+      const commonDaysForGroup = DAYS.filter((day) =>
+        allGroupTeachers.every((t) => t.availableDays.includes(day)),
+      )
+      if (commonDaysForGroup.length === 0) {
+        const names = allGroupTeachers.map((t) => t.name).join('・')
+        for (const a of groupAssignments) {
+          warnings.push({
+            severity: 'error',
+            assignmentId: a.id,
+            message: `同時開講グループの全教員（${names}）に共通の勤務可能日がありません`,
+          })
+        }
+      }
+    }
+
+    // 連続授業の混在チェック
+    const hasConsecutive = groupAssignments.some((a) => {
+      const s = subjectMap.get(a.subjectId)
+      return s?.isConsecutive
+    })
+    const hasNonConsecutive = groupAssignments.some((a) => {
+      const s = subjectMap.get(a.subjectId)
+      return s && !s.isConsecutive
+    })
+    if (hasConsecutive && hasNonConsecutive) {
+      for (const a of groupAssignments) {
+        warnings.push({
+          severity: 'warning',
+          assignmentId: a.id,
+          message: '同時開講グループ内に連続授業と通常授業が混在しています（連続授業として扱われます）',
+        })
+      }
+    }
+  }
+
   // 同一教員の総コマ数チェック
   const teacherTotalSlots = new Map<string, number>()
   for (const assignment of assignments) {

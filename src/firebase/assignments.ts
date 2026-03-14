@@ -109,6 +109,7 @@ function docToAssignment(snap: QueryDocumentSnapshot): Assignment {
     // teacherIds は文字列配列として保存・復元
     teacherIds: (d.teacherIds ?? []) as string[],
     weeklyCount: d.weeklyCount as number,
+    ...(d.simultaneousGroupId ? { simultaneousGroupId: d.simultaneousGroupId as string } : {}),
     ...(d.notes !== undefined ? { notes: d.notes as string } : {}),
     createdAt: (d.createdAt as Timestamp).toDate(),
     updatedAt: (d.updatedAt as Timestamp).toDate(),
@@ -136,6 +137,7 @@ export async function addAssignment(input: CreateInput<Assignment>): Promise<Ass
     subjectId: input.subjectId,
     teacherIds: input.teacherIds,
     weeklyCount: input.weeklyCount,
+    ...(input.simultaneousGroupId ? { simultaneousGroupId: input.simultaneousGroupId } : {}),
     ...(input.notes !== undefined ? { notes: input.notes } : {}),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
