@@ -137,6 +137,29 @@ function isExcludedPeriodForSubject(subject: Subject, period: Period): boolean {
   return subject.excludedPeriods.includes(period)
 }
 
+/** 連続配置禁止: 隣接スロットに同じ科目が既に配置されていないかチェック */
+function hasAdjacentSameSubject(
+  state: BoardState,
+  day: DayOfWeek,
+  period: Period,
+  classId: string,
+  assignmentId: string,
+): boolean {
+  // 前の時限をチェック
+  if (period > 1) {
+    const prevKey = cellKey(day, (period - 1) as Period, classId)
+    const prevAssignment = state.classGrid.get(prevKey)
+    if (prevAssignment === assignmentId) return true
+  }
+  // 次の時限をチェック
+  if (period < 6) {
+    const nextKey = cellKey(day, (period + 1) as Period, classId)
+    const nextAssignment = state.classGrid.get(nextKey)
+    if (nextAssignment === assignmentId) return true
+  }
+  return false
+}
+
 // ============================================================
 // タスク生成・優先度計算
 // ============================================================
@@ -186,6 +209,9 @@ function buildTasks(
       if (subject.excludedPeriods && subject.excludedPeriods.length > 0) {
         priority -= subject.excludedPeriods.length * 5
       }
+
+      // 連続配置禁止は候補が制限される
+      if (subject.noConsecutive) priority -= 30
 
       tasks.push({
         assignment,
@@ -245,6 +271,11 @@ function canPlace(
   // 科目の配置不可時限チェック
   if (isExcludedPeriodForSubject(task.subject, period)) return false
 
+  // 連続配置禁止チェック（ハード制約）
+  if (task.subject.noConsecutive) {
+    if (hasAdjacentSameSubject(state, day, period, classId, task.assignment.id)) return false
+  }
+
   // クラス重複チェック
   if (!isSlotFreeForClass(state, day, period, classId)) return false
 
@@ -280,6 +311,13 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
     const existingCount = state.classDaySubjectCount.get(cdsKey) ?? 0
     if (existingCount > 0) {
       score -= 15 * existingCount
+    }
+  }
+
+  // noConsecutive の場合: 隣接に同科目があるスロットは大幅減点（canPlaceで弾くが念のため）
+  if (task.subject.noConsecutive) {
+    if (hasAdjacentSameSubject(state, slot.day, slot.period, task.assignment.classId, task.assignment.id)) {
+      score -= 100
     }
   }
 

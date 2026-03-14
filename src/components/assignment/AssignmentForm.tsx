@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import type { Assignment, Teacher, Subject, CreateInput } from '../../types'
 import { ErrorAlert } from '../common/ErrorAlert'
-import { CLASS_OPTIONS } from '../../utils/constants'
+import { CLASS_OPTIONS, SUBJECT_CATEGORIES } from '../../utils/constants'
+import type { ClassOption } from '../../utils/constants'
 
 interface FormState {
-  classId: string
+  classIds: string[]
   subjectId: string
   teacherIds: string[]
   weeklyCount: number
@@ -15,7 +16,7 @@ interface AssignmentFormProps {
   initialValues?: Assignment
   teachers: Teacher[]
   subjects: Subject[]
-  onSubmit: (data: CreateInput<Assignment>) => Promise<void>
+  onSubmit: (data: CreateInput<Assignment>[]) => Promise<void>
   onCancel: () => void
 }
 
@@ -33,7 +34,7 @@ export function AssignmentForm({
   const isEditMode = !!initialValues
 
   const [form, setForm] = useState<FormState>({
-    classId: initialValues?.classId ?? '',
+    classIds: initialValues ? [initialValues.classId] : [],
     subjectId: initialValues?.subjectId ?? '',
     teacherIds: initialValues?.teacherIds ?? [],
     weeklyCount: initialValues?.weeklyCount ?? 2,
@@ -52,6 +53,27 @@ export function AssignmentForm({
     }))
   }
 
+  const toggleClass = (classId: string) => {
+    setForm((p) => ({
+      ...p,
+      classIds: p.classIds.includes(classId)
+        ? p.classIds.filter((id) => id !== classId)
+        : [...p.classIds, classId],
+    }))
+  }
+
+  const toggleGrade = (grade: number) => {
+    const gradeClassIds = CLASS_OPTIONS.filter((c) => c.grade === grade).map((c) => c.id)
+    setForm((p) => {
+      const allSelected = gradeClassIds.every((id) => p.classIds.includes(id))
+      if (allSelected) {
+        return { ...p, classIds: p.classIds.filter((id) => !gradeClassIds.includes(id)) }
+      } else {
+        return { ...p, classIds: Array.from(new Set([...p.classIds, ...gradeClassIds])) }
+      }
+    })
+  }
+
   const toggleTeacher = (teacherId: string) => {
     setForm((p) => ({
       ...p,
@@ -65,8 +87,8 @@ export function AssignmentForm({
     e.preventDefault()
     setFormError(null)
 
-    if (!form.classId) {
-      setFormError('クラスを選択してください')
+    if (form.classIds.length === 0) {
+      setFormError('クラスを1つ以上選択してください')
       return
     }
     if (!form.subjectId) {
@@ -80,13 +102,14 @@ export function AssignmentForm({
 
     setSubmitting(true)
     try {
-      await onSubmit({
-        classId: form.classId,
+      const inputs: CreateInput<Assignment>[] = form.classIds.map((classId) => ({
+        classId,
         subjectId: form.subjectId,
         teacherIds: form.teacherIds,
         weeklyCount: form.weeklyCount,
         ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
-      })
+      }))
+      await onSubmit(inputs)
     } catch (err) {
       setFormError(err instanceof Error ? err.message : '保存に失敗しました')
     } finally {
@@ -96,6 +119,40 @@ export function AssignmentForm({
 
   const selectedSubject = subjects.find((s) => s.id === form.subjectId)
   const isTT = form.teacherIds.length > 1
+
+  // 学年ごとのクラスグループ
+  const classGroups: { grade: number; classes: ClassOption[] }[] = [1, 2, 3].map((grade) => ({
+    grade,
+    classes: CLASS_OPTIONS.filter((c) => c.grade === grade),
+  }))
+
+  // 教科カテゴリごとに科目をグルーピング（科目名でソート）
+  const subjectGroups = SUBJECT_CATEGORIES
+    .map((cat) => ({
+      category: cat,
+      subjects: subjects
+        .filter((s) => s.category === cat)
+        .sort((a, b) => a.name.localeCompare(b.name, 'ja')),
+    }))
+    .filter((g) => g.subjects.length > 0)
+
+  // 所属教科ごとに教員をグルーピング（五十音順ソート）
+  const teacherGroups = [
+    ...SUBJECT_CATEGORIES
+      .map((cat) => ({
+        label: cat,
+        teachers: teachers
+          .filter((t) => t.department === cat)
+          .sort((a, b) => a.name.localeCompare(b.name, 'ja')),
+      }))
+      .filter((g) => g.teachers.length > 0),
+    ...(() => {
+      const unassigned = teachers
+        .filter((t) => !t.department)
+        .sort((a, b) => a.name.localeCompare(b.name, 'ja'))
+      return unassigned.length > 0 ? [{ label: 'その他', teachers: unassigned }] : []
+    })(),
+  ]
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8" noValidate>
@@ -108,55 +165,103 @@ export function AssignmentForm({
 
       {formError && <ErrorAlert message={formError} onDismiss={() => setFormError(null)} />}
 
-      {/* ── セクション 1: クラス × 科目 ── */}
+      {/* ── セクション 1: クラス ── */}
       <section className="space-y-4">
-        <h3 className="section-heading">クラスと科目</h3>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label htmlFor="assign-class" className="form-label">
-              クラス <span className="text-red-500">*</span>
-            </label>
-            <select
-              id="assign-class"
-              value={form.classId}
-              onChange={(e) => setForm((p) => ({ ...p, classId: e.target.value }))}
-              className="form-select"
-              required
+        <div className="flex items-baseline justify-between">
+          <h3 className="section-heading mb-0">
+            クラス <span className="text-red-500">*</span>
+            {!isEditMode && form.classIds.length > 0 && (
+              <span className="ml-2 text-xs font-normal text-gray-500">
+                {form.classIds.length}クラス選択中
+              </span>
+            )}
+          </h3>
+          {!isEditMode && form.classIds.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setForm((p) => ({ ...p, classIds: [] }))}
+              className="text-xs text-gray-400 underline hover:text-gray-600"
             >
-              <option value="">選択してください</option>
-              {[1, 2, 3].map((grade) => (
-                <optgroup key={grade} label={`${grade}年生`}>
-                  {CLASS_OPTIONS.filter((c) => c.grade === grade).map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.displayName}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="assign-subject" className="form-label">
-              科目 <span className="text-red-500">*</span>
-            </label>
-            <select
-              id="assign-subject"
-              value={form.subjectId}
-              onChange={(e) => handleSubjectChange(e.target.value)}
-              className="form-select"
-              required
-            >
-              <option value="">選択してください</option>
-              {subjects.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
+              クリア
+            </button>
+          )}
         </div>
+
+        {isEditMode ? (
+          // 編集モード: 単一クラス表示（変更不可）
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+            {CLASS_OPTIONS.find((c) => c.id === form.classIds[0])?.displayName ?? form.classIds[0]}
+          </div>
+        ) : (
+          // 新規モード: 学年ごとにチェックボックス
+          <div className="space-y-3">
+            {classGroups.map((group) => {
+              const allSelected = group.classes.every((c) => form.classIds.includes(c.id))
+              const someSelected = group.classes.some((c) => form.classIds.includes(c.id))
+              return (
+                <div key={group.grade}>
+                  <label className="mb-1.5 flex cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected }}
+                      onChange={() => toggleGrade(group.grade)}
+                      className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span className="text-xs font-semibold text-gray-500">{group.grade}年生</span>
+                  </label>
+                  <div className="ml-6 flex flex-wrap gap-2">
+                    {group.classes.map((c) => {
+                      const checked = form.classIds.includes(c.id)
+                      return (
+                        <label
+                          key={c.id}
+                          className={[
+                            'flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all',
+                            checked
+                              ? 'border-primary-300 bg-primary-50 text-primary-700 shadow-sm'
+                              : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50',
+                          ].join(' ')}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleClass(c.id)}
+                            className="h-3.5 w-3.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          />
+                          {c.displayName}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* ── セクション 2: 科目 ── */}
+      <section className="space-y-4">
+        <h3 className="section-heading">
+          科目 <span className="text-red-500">*</span>
+        </h3>
+        <select
+          id="assign-subject"
+          value={form.subjectId}
+          onChange={(e) => handleSubjectChange(e.target.value)}
+          className="form-select"
+          required
+        >
+          <option value="">選択してください</option>
+          {subjectGroups.map((g) => (
+            <optgroup key={g.category} label={g.category}>
+              {g.subjects.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
 
         {/* 選択した科目の情報ヒント */}
         {selectedSubject && (
@@ -167,6 +272,11 @@ export function AssignmentForm({
             {selectedSubject.isConsecutive && (
               <span className="badge border border-amber-200 bg-amber-50 text-amber-700">
                 連続授業
+              </span>
+            )}
+            {selectedSubject.noConsecutive && (
+              <span className="badge border border-orange-200 bg-orange-50 text-orange-700">
+                連続配置禁止
               </span>
             )}
             {selectedSubject.preferredPeriods && (
@@ -198,7 +308,7 @@ export function AssignmentForm({
         </div>
       </section>
 
-      {/* ── セクション 2: 担当教員（TT対応マルチセレクト） ── */}
+      {/* ── セクション 3: 担当教員（TT対応マルチセレクト、教科グループ） ── */}
       <section>
         <div className="mb-3 flex items-baseline justify-between">
           <h3 className="section-heading mb-0">
@@ -226,47 +336,53 @@ export function AssignmentForm({
         {teachers.length === 0 ? (
           <p className="text-sm text-gray-400">教員が登録されていません</p>
         ) : (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {teachers.map((teacher) => {
-              const selected = form.teacherIds.includes(teacher.id)
-              // 選択中の科目が担当可能かチェック
-              const canTeach =
-                !form.subjectId || teacher.subjectIds.includes(form.subjectId)
+          <div className="space-y-4">
+            {teacherGroups.map((group) => (
+              <div key={group.label}>
+                <p className="mb-1.5 text-xs font-semibold text-gray-500">{group.label}</p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {group.teachers.map((teacher) => {
+                    const selected = form.teacherIds.includes(teacher.id)
+                    const canTeach =
+                      !form.subjectId || teacher.subjectIds.includes(form.subjectId)
 
-              return (
-                <label
-                  key={teacher.id}
-                  className={[
-                    'flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-all',
-                    selected
-                      ? 'border-primary-300 bg-primary-50'
-                      : canTeach
-                        ? 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-                        : 'border-gray-100 bg-gray-50 opacity-50',
-                  ].join(' ')}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => toggleTeacher(teacher.id)}
-                    disabled={!canTeach && !selected}
-                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <div className="min-w-0">
-                    <p
-                      className={`truncate text-sm font-medium ${
-                        selected ? 'text-primary-800' : 'text-gray-800'
-                      }`}
-                    >
-                      {teacher.name}
-                    </p>
-                    {!canTeach && (
-                      <p className="text-xs text-gray-400">担当科目外</p>
-                    )}
-                  </div>
-                </label>
-              )
-            })}
+                    return (
+                      <label
+                        key={teacher.id}
+                        className={[
+                          'flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-all',
+                          selected
+                            ? 'border-primary-300 bg-primary-50'
+                            : canTeach
+                              ? 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                              : 'border-gray-100 bg-gray-50 opacity-50',
+                        ].join(' ')}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => toggleTeacher(teacher.id)}
+                          disabled={!canTeach && !selected}
+                          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <div className="min-w-0">
+                          <p
+                            className={`truncate text-sm font-medium ${
+                              selected ? 'text-primary-800' : 'text-gray-800'
+                            }`}
+                          >
+                            {teacher.name}
+                          </p>
+                          {!canTeach && (
+                            <p className="text-xs text-gray-400">担当科目外</p>
+                          )}
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -275,7 +391,7 @@ export function AssignmentForm({
         )}
       </section>
 
-      {/* ── セクション 3: 備考 ── */}
+      {/* ── セクション 4: 備考 ── */}
       <section>
         <h3 className="section-heading">備考</h3>
         <textarea
@@ -299,6 +415,8 @@ export function AssignmentForm({
             </>
           ) : isEditMode ? (
             '更新する'
+          ) : form.classIds.length > 1 ? (
+            `${form.classIds.length}クラス分を登録`
           ) : (
             '登録する'
           )}

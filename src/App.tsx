@@ -22,7 +22,7 @@ import { AssignmentBulkForm } from './components/assignment/AssignmentBulkForm'
 import { AssignmentList } from './components/assignment/AssignmentList'
 
 import { useSettings } from './hooks/useSettings'
-import { buildClassOptions, SUBJECT_CATEGORIES } from './utils/constants'
+import { buildClassOptions, getClassLabel, SUBJECT_CATEGORIES } from './utils/constants'
 
 // 遅延ロード: 時間割ビューと設定パネル
 const ScheduleViewContainer = lazy(() =>
@@ -120,6 +120,20 @@ function TeacherSection() {
     }
   }
 
+  const handleDelete = async (id: string) => {
+    // 授業割当で使用中かチェック
+    const usedIn = assignments.filter((a) => a.teacherIds.includes(id))
+    if (usedIn.length > 0) {
+      const subjectNames = usedIn
+        .map((a) => subjects.find((s) => s.id === a.subjectId)?.name ?? a.subjectId)
+        .filter((v, i, arr) => arr.indexOf(v) === i)
+        .join('、')
+      alert(`この教員は授業割当で使用中のため削除できません（${subjectNames}）。\n先に該当する授業割当を削除してください。`)
+      return
+    }
+    await deleteTeacher(id)
+  }
+
   if (loading) return <LoadingSpinner message="教員データを読み込み中..." />
 
   return (
@@ -182,7 +196,7 @@ function TeacherSection() {
             subjects={subjects}
             assignments={assignments}
             onEdit={openEdit}
-            onDelete={deleteTeacher}
+            onDelete={handleDelete}
           />
         </>
       )}
@@ -234,6 +248,19 @@ function SubjectSection() {
     }
   }
 
+  const handleDelete = async (id: string) => {
+    // 授業割当で使用中かチェック
+    const usedIn = assignments.filter((a) => a.subjectId === id)
+    if (usedIn.length > 0) {
+      const classNames = usedIn
+        .map((a) => getClassLabel(a.classId))
+        .join('、')
+      alert(`この科目は授業割当で使用中のため削除できません（${classNames}）。\n先に該当する授業割当を削除してください。`)
+      return
+    }
+    await deleteSubject(id)
+  }
+
   if (loading) return <LoadingSpinner message="科目データを読み込み中..." />
 
   return (
@@ -275,7 +302,7 @@ function SubjectSection() {
             subjects={subjects}
             assignments={assignments}
             onEdit={openEdit}
-            onDelete={deleteSubject}
+            onDelete={handleDelete}
           />
         </>
       )}
@@ -325,11 +352,13 @@ function AssignmentSection() {
     setEditTarget(null)
   }
 
-  const handleSubmit = async (data: CreateInput<Assignment>) => {
-    if (editTarget) {
-      await updateAssignment(editTarget.id, data)
+  const handleSubmit = async (inputs: CreateInput<Assignment>[]) => {
+    if (editTarget && inputs.length === 1) {
+      await updateAssignment(editTarget.id, inputs[0])
     } else {
-      await addAssignment(data)
+      for (const data of inputs) {
+        await addAssignment(data)
+      }
     }
     closeForm()
   }
@@ -438,8 +467,23 @@ function App() {
     <div className="min-h-screen bg-gray-50">
       {/* 認証エラー時は警告バナー（アプリ自体はブロックしない） */}
       {authError && (
-        <div className="bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-sm text-yellow-800">
-          認証に失敗しました（Firestore への保存が制限される場合があります）。Firebase コンソールで匿名認証を有効にしてください。
+        <div className="bg-red-50 border-b border-red-300 px-4 py-3 text-sm text-red-800">
+          <div className="mx-auto flex max-w-7xl items-center gap-3">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5 shrink-0 text-red-500">
+              <path fillRule="evenodd" d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-8-5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 10 5Zm0 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
+            </svg>
+            <div>
+              <strong>認証に失敗しました。</strong>データの保存・読み込みができない可能性があります。
+              ページを再読み込みするか、Firebase コンソールで匿名認証を有効にしてください。
+            </div>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="ml-auto shrink-0 rounded bg-red-100 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
+            >
+              再読み込み
+            </button>
+          </div>
         </div>
       )}
 
