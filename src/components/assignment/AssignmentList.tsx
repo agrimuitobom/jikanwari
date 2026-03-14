@@ -264,6 +264,11 @@ export function AssignmentList({
                           連続
                         </span>
                       )}
+                      {assignment.simultaneousGroupId && (
+                        <span className="badge border border-teal-200 bg-teal-50 text-teal-700">
+                          同時開講
+                        </span>
+                      )}
                     </div>
                   </td>
 

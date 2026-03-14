@@ -9,6 +9,8 @@ interface FormState {
   subjectId: string
   teacherIds: string[]
   weeklyCount: number
+  isSimultaneous: boolean
+  simultaneousGroupId: string
   notes: string
 }
 
@@ -16,6 +18,7 @@ interface AssignmentFormProps {
   initialValues?: Assignment
   teachers: Teacher[]
   subjects: Subject[]
+  existingAssignments?: Assignment[]
   onSubmit: (data: CreateInput<Assignment>[]) => Promise<void>
   onCancel: () => void
 }
@@ -28,6 +31,7 @@ export function AssignmentForm({
   initialValues,
   teachers,
   subjects,
+  existingAssignments = [],
   onSubmit,
   onCancel,
 }: AssignmentFormProps) {
@@ -38,6 +42,8 @@ export function AssignmentForm({
     subjectId: initialValues?.subjectId ?? '',
     teacherIds: initialValues?.teacherIds ?? [],
     weeklyCount: initialValues?.weeklyCount ?? 2,
+    isSimultaneous: !!initialValues?.simultaneousGroupId,
+    simultaneousGroupId: initialValues?.simultaneousGroupId ?? '',
     notes: initialValues?.notes ?? '',
   })
   const [submitting, setSubmitting] = useState(false)
@@ -83,6 +89,28 @@ export function AssignmentForm({
     }))
   }
 
+  // 既存の同時開講グループ一覧（編集モードで既存グループに参加する場合に使用）
+  const existingSimultaneousGroups = (() => {
+    const groups = new Map<string, { groupId: string; subjectName: string; classNames: string[] }>()
+    for (const a of existingAssignments) {
+      if (!a.simultaneousGroupId) continue
+      // 編集時は自分自身のグループは除外しない（同じグループに留まる選択肢として表示）
+      const existing = groups.get(a.simultaneousGroupId)
+      const subjectName = subjects.find((s) => s.id === a.subjectId)?.name ?? a.subjectId
+      const className = CLASS_OPTIONS.find((c) => c.id === a.classId)?.displayName ?? a.classId
+      if (existing) {
+        existing.classNames.push(className)
+      } else {
+        groups.set(a.simultaneousGroupId, {
+          groupId: a.simultaneousGroupId,
+          subjectName,
+          classNames: [className],
+        })
+      }
+    }
+    return Array.from(groups.values())
+  })()
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setFormError(null)
@@ -102,11 +130,24 @@ export function AssignmentForm({
 
     setSubmitting(true)
     try {
+      // 同時開講グループIDの決定
+      let groupId: string | undefined
+      if (form.isSimultaneous) {
+        if (form.simultaneousGroupId) {
+          // 既存グループに参加
+          groupId = form.simultaneousGroupId
+        } else {
+          // 新規グループID生成
+          groupId = `sim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        }
+      }
+
       const inputs: CreateInput<Assignment>[] = form.classIds.map((classId) => ({
         classId,
         subjectId: form.subjectId,
         teacherIds: form.teacherIds,
         weeklyCount: form.weeklyCount,
+        ...(groupId ? { simultaneousGroupId: groupId } : {}),
         ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
       }))
       await onSubmit(inputs)
@@ -308,7 +349,88 @@ export function AssignmentForm({
         </div>
       </section>
 
-      {/* ── セクション 3: 担当教員（TT対応マルチセレクト、教科グループ） ── */}
+      {/* ── セクション 3: 同時開講設定 ── */}
+      {(form.classIds.length >= 2 || isEditMode) && (
+        <section className="space-y-3">
+          <h3 className="section-heading">同時開講</h3>
+
+          <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 bg-white p-4 transition-all hover:border-gray-300">
+            <input
+              type="checkbox"
+              checked={form.isSimultaneous}
+              onChange={(e) =>
+                setForm((p) => ({
+                  ...p,
+                  isSimultaneous: e.target.checked,
+                  simultaneousGroupId: e.target.checked ? p.simultaneousGroupId : '',
+                }))
+              }
+              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            <div>
+              <p className="text-sm font-medium text-gray-800">
+                同時開講にする
+              </p>
+              <p className="text-xs text-gray-500">
+                選択したクラスを同じ曜日・同じ時限に配置します（例: 体育を全クラス合同で実施）
+              </p>
+            </div>
+          </label>
+
+          {form.isSimultaneous && (
+            <div className="ml-7 space-y-3">
+              {/* 新規グループ or 既存グループに参加 */}
+              <div className="space-y-2">
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="radio"
+                    name="simGroup"
+                    checked={!form.simultaneousGroupId}
+                    onChange={() => setForm((p) => ({ ...p, simultaneousGroupId: '' }))}
+                    className="h-4 w-4 border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <span className="text-sm text-gray-700">新しい同時開講グループを作成</span>
+                </label>
+
+                {existingSimultaneousGroups.length > 0 && (
+                  <>
+                    <p className="text-xs font-medium text-gray-500">または既存グループに参加:</p>
+                    {existingSimultaneousGroups.map((g) => (
+                      <label key={g.groupId} className="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="radio"
+                          name="simGroup"
+                          checked={form.simultaneousGroupId === g.groupId}
+                          onChange={() => setForm((p) => ({ ...p, simultaneousGroupId: g.groupId }))}
+                          className="h-4 w-4 border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <span className="text-sm text-gray-700">
+                          {g.subjectName}（{g.classNames.join('・')}）
+                        </span>
+                      </label>
+                    ))}
+                  </>
+                )}
+              </div>
+
+              {/* 同時開講の説明 */}
+              <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-xs text-teal-800">
+                <p className="font-medium">同時開講の仕組み:</p>
+                <ul className="mt-1 list-inside list-disc space-y-0.5">
+                  <li>同じグループの全授業が同じ曜日・時限に配置されます</li>
+                  <li>教員は全クラスで共有（体育4人で3クラスを指導など）</li>
+                  <li>
+                    異なる科目を同時開講グループにすることもできます
+                    （例: 進学コース英語C2と各クラスの専門科目）
+                  </li>
+                </ul>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ── セクション 4: 担当教員（TT対応マルチセレクト、教科グループ） ── */}
       <section>
         <div className="mb-3 flex items-baseline justify-between">
           <h3 className="section-heading mb-0">
@@ -391,7 +513,7 @@ export function AssignmentForm({
         )}
       </section>
 
-      {/* ── セクション 4: 備考 ── */}
+      {/* ── セクション 5: 備考 ── */}
       <section>
         <h3 className="section-heading">備考</h3>
         <textarea
@@ -416,7 +538,7 @@ export function AssignmentForm({
           ) : isEditMode ? (
             '更新する'
           ) : form.classIds.length > 1 ? (
-            `${form.classIds.length}クラス分を登録`
+            `${form.classIds.length}クラス分を${form.isSimultaneous ? '同時開講で' : ''}登録`
           ) : (
             '登録する'
           )}

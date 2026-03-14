@@ -392,6 +392,7 @@ function AssignmentSection() {
             initialValues={editTarget ?? undefined}
             teachers={teachers}
             subjects={subjects}
+            existingAssignments={assignments}
             onSubmit={handleSubmit}
             onCancel={closeForm}
           />
