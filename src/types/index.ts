@@ -23,6 +23,7 @@ export type SubjectCategory =
   | '保健体育'
   | '農業'
   | '商業'
+  | 'その他'
 
 /** クラス番号 */
 export type ClassNumber = number
