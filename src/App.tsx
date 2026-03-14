@@ -352,11 +352,13 @@ function AssignmentSection() {
     setEditTarget(null)
   }
 
-  const handleSubmit = async (data: CreateInput<Assignment>) => {
-    if (editTarget) {
-      await updateAssignment(editTarget.id, data)
+  const handleSubmit = async (inputs: CreateInput<Assignment>[]) => {
+    if (editTarget && inputs.length === 1) {
+      await updateAssignment(editTarget.id, inputs[0])
     } else {
-      await addAssignment(data)
+      for (const data of inputs) {
+        await addAssignment(data)
+      }
     }
     closeForm()
   }
