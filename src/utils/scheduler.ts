@@ -437,6 +437,12 @@ function canPlaceSingle(
   // クラス重複チェック
   if (!isSlotFreeForClass(state, day, period, classId)) return false
 
+  // 同日同科目禁止（連続授業を除く）: 同じクラスで同じ日に同じ科目は配置不可
+  if (!subject.isConsecutive) {
+    const cdsKey = classDaySubjectKey(day, classId, subject.id)
+    if ((state.classDaySubjectCount.get(cdsKey) ?? 0) > 0) return false
+  }
+
   // 教員の空き・重複チェック（TT対応: 全教員を確認）
   for (const teacher of teachers) {
     if (!isTeacherAvailable(teacher, day, period)) return false
@@ -465,15 +471,6 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
         if (isInPreferredPeriod(subject, secondPeriod)) {
           score += 10
         }
-      }
-    }
-
-    // ソフト制約: 同日に同科目を同クラスに配置するのを避ける（連続授業を除く）
-    if (!task.isConsecutive) {
-      const cdsKey = classDaySubjectKey(slot.day, assignment.classId, subject.id)
-      const existingCount = state.classDaySubjectCount.get(cdsKey) ?? 0
-      if (existingCount > 0) {
-        score -= 15 * existingCount
       }
     }
 
@@ -630,23 +627,6 @@ function calculateScore(
   if (preferredTotal > 0) {
     score += (preferredHits / preferredTotal) * 200
   }
-
-  // ソフト制約ペナルティ: 同日同科目の重複（最大 -100点）
-  const dayClassSubjectCounts = new Map<string, number>()
-  for (const entry of entries) {
-    if (entry.isConsecutiveSecond) continue
-    const assignment = assignmentMap.get(entry.assignmentId)
-    if (!assignment) continue
-    const subject = subjectMap.get(assignment.subjectId)
-    if (!subject || subject.isConsecutive) continue
-    const key = classDaySubjectKey(entry.day, entry.classId, subject.id)
-    dayClassSubjectCounts.set(key, (dayClassSubjectCounts.get(key) ?? 0) + 1)
-  }
-  let duplicates = 0
-  for (const count of dayClassSubjectCounts.values()) {
-    if (count > 1) duplicates += count - 1
-  }
-  score -= Math.min(duplicates * 15, 100)
 
   // ソフト制約ペナルティ: 教員1日あたりの過剰コマ数（最大 -100点）
   const teacherDayCounts = new Map<string, number>()

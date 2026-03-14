@@ -427,39 +427,38 @@ describe('scheduler', () => {
     })
   })
 
-  describe('ソフト制約: 教員1日あたりの最大コマ数', () => {
-    it('教員の1日のコマ数が5コマを超えるとスコアが下がる', () => {
-      // 月曜のみ勤務の教員に6コマ配置（5コマ上限のソフト制約超過）
+  describe('ハード制約: 同日同科目禁止', () => {
+    it('1日しか勤務日がない教員に複数コマは1コマしか配置できない', () => {
+      // 月曜のみ勤務の教員に3コマ → 同日同科目禁止により1コマしか配置不可
       const teacher = makeTeacher({
         availableDays: ['monday'] as DayOfWeek[],
       })
-      const subject = makeSubject({ weeklyFrequency: 6 })
+      const subject = makeSubject({ weeklyFrequency: 3 })
       const assignment = makeAssignment({
         subjectId: subject.id,
         teacherIds: [teacher.id],
-        weeklyCount: 6,
+        weeklyCount: 3,
       })
 
       const result = runGenerator([teacher], [subject], [assignment])
-      expect(result.isComplete).toBe(true)
-      // 6コマ全て配置されるが、スコアは最大1000未満（1コマ超過のペナルティ）
-      expect(result.score).toBeLessThan(1000)
+      expect(result.isComplete).toBe(false)
+      expect(result.unplacedTasks.length).toBeGreaterThan(0)
     })
 
-    it('複数日に分散すれば高スコアになる', () => {
+    it('勤務日数が足りれば全コマ配置でき高スコアになる', () => {
+      // 5日勤務の教員に5コマ → 各日1コマずつ配置可能
       const teacher = makeTeacher({
-        availableDays: ['monday', 'tuesday', 'wednesday'] as DayOfWeek[],
+        availableDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] as DayOfWeek[],
       })
-      const subject = makeSubject({ weeklyFrequency: 6 })
+      const subject = makeSubject({ weeklyFrequency: 5 })
       const assignment = makeAssignment({
         subjectId: subject.id,
         teacherIds: [teacher.id],
-        weeklyCount: 6,
+        weeklyCount: 5,
       })
 
       const result = runGenerator([teacher], [subject], [assignment])
       expect(result.isComplete).toBe(true)
-      // 分散可能なのでペナルティが軽いか0
       expect(result.score).toBeGreaterThanOrEqual(900)
     })
   })
