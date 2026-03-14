@@ -184,6 +184,15 @@ export interface Assignment {
    * 未設定（undefined）の場合は通常の個別配置。
    */
   simultaneousGroupId?: string
+  /**
+   * 固定時間スロット。
+   * 指定された曜日・時限に必ず配置される（スケジューラが自動配置しない）。
+   *
+   * 例: ホームルーム → [{ day: 'thursday', period: 6 }]
+   *
+   * 未設定（undefined）の場合はスケジューラが自動配置。
+   */
+  fixedSlots?: TimeSlot[]
   /** 備考（特記事項など） */
   notes?: string
   createdAt: Date

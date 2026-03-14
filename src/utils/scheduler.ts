@@ -63,6 +63,8 @@ interface ScheduleTask {
   priority: number
   /** 同時開講グループID（グループタスクの場合） */
   simultaneousGroupId?: string
+  /** 固定配置スロット（指定時は自動配置せずここに配置） */
+  fixedSlot?: Slot
 }
 
 /** 曜日×時限のスロット */
@@ -220,9 +222,14 @@ function buildTasks(
 
     const slotsPerTask = subject.isConsecutive ? 2 : 1
     const taskCount = Math.ceil(assignment.weeklyCount / slotsPerTask)
+    const fixedSlots = assignment.fixedSlots ?? []
 
     for (let i = 0; i < taskCount; i++) {
-      const priority = calculatePriority(subject, teachers)
+      const fixedSlot = i < fixedSlots.length
+        ? { day: fixedSlots[i].day, period: fixedSlots[i].period }
+        : undefined
+      // 固定スロットは最優先（priority = -1000）
+      const priority = fixedSlot ? -1000 : calculatePriority(subject, teachers)
 
       tasks.push({
         assignments: [assignment],
@@ -230,6 +237,7 @@ function buildTasks(
         teacherGroups: [teachers],
         isConsecutive: subject.isConsecutive,
         priority,
+        fixedSlot,
       })
     }
   }
@@ -260,28 +268,47 @@ function buildTasks(
 
     const slotsPerTask = isConsecutive ? 2 : 1
     const taskCount = Math.ceil(weeklyCount / slotsPerTask)
+    // 同時開講グループの固定スロットは最初のassignmentから取得
+    const groupFixedSlots = groupAssignments[0]?.fixedSlots ?? []
 
     for (let i = 0; i < taskCount; i++) {
-      // 同時開講グループはより制約が厳しい（複数クラス＋複数教員を同時に配置）
-      let priority = -200 // 最優先
+      const fixedSlot = i < groupFixedSlots.length
+        ? { day: groupFixedSlots[i].day, period: groupFixedSlots[i].period }
+        : undefined
 
-      // 各割当の教員の制約を集約
-      const allTeachers = getAllTeachersFlat({ assignments: groupAssignments, subjects: groupSubjects, teacherGroups: groupTeacherGroups, isConsecutive, priority: 0 })
-      priority -= allTeachers.length * 20
-      if (isConsecutive) priority -= 100
-      priority -= groupAssignments.length * 30 // クラス数が多いほど制約が厳しい
+      if (fixedSlot) {
+        // 固定スロットの同時開講は最最優先
+        tasks.push({
+          assignments: groupAssignments,
+          subjects: groupSubjects,
+          teacherGroups: groupTeacherGroups,
+          isConsecutive,
+          priority: -1500,
+          simultaneousGroupId: groupId,
+          fixedSlot,
+        })
+      } else {
+        // 同時開講グループはより制約が厳しい（複数クラス＋複数教員を同時に配置）
+        let priority = -200 // 最優先
 
-      const minAvailDays = Math.min(...allTeachers.map((t) => t.availableDays.length))
-      priority -= (5 - minAvailDays) * 10
+        // 各割当の教員の制約を集約
+        const allTeachers = getAllTeachersFlat({ assignments: groupAssignments, subjects: groupSubjects, teacherGroups: groupTeacherGroups, isConsecutive, priority: 0 })
+        priority -= allTeachers.length * 20
+        if (isConsecutive) priority -= 100
+        priority -= groupAssignments.length * 30 // クラス数が多いほど制約が厳しい
 
-      tasks.push({
-        assignments: groupAssignments,
-        subjects: groupSubjects,
-        teacherGroups: groupTeacherGroups,
-        isConsecutive,
-        priority,
-        simultaneousGroupId: groupId,
-      })
+        const minAvailDays = Math.min(...allTeachers.map((t) => t.availableDays.length))
+        priority -= (5 - minAvailDays) * 10
+
+        tasks.push({
+          assignments: groupAssignments,
+          subjects: groupSubjects,
+          teacherGroups: groupTeacherGroups,
+          isConsecutive,
+          priority,
+          simultaneousGroupId: groupId,
+        })
+      }
     }
   }
 
@@ -328,6 +355,21 @@ function getCandidateSlots(
   task: ScheduleTask,
   state: BoardState,
 ): Slot[] {
+  // 固定スロットの場合はそのスロットのみを候補にする
+  if (task.fixedSlot) {
+    const { day, period } = task.fixedSlot
+    if (task.isConsecutive) {
+      if (canPlaceTask(task, state, day, period) && canPlaceTask(task, state, day, (period + 1) as Period)) {
+        return [{ day, period }]
+      }
+    } else {
+      if (canPlaceTask(task, state, day, period)) {
+        return [{ day, period }]
+      }
+    }
+    return []
+  }
+
   const candidates: Slot[] = []
 
   for (const day of DAYS) {
@@ -395,6 +437,12 @@ function canPlaceSingle(
   // クラス重複チェック
   if (!isSlotFreeForClass(state, day, period, classId)) return false
 
+  // 同日同科目禁止（連続授業を除く）: 同じクラスで同じ日に同じ科目は配置不可
+  if (!subject.isConsecutive) {
+    const cdsKey = classDaySubjectKey(day, classId, subject.id)
+    if ((state.classDaySubjectCount.get(cdsKey) ?? 0) > 0) return false
+  }
+
   // 教員の空き・重複チェック（TT対応: 全教員を確認）
   for (const teacher of teachers) {
     if (!isTeacherAvailable(teacher, day, period)) return false
@@ -423,15 +471,6 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
         if (isInPreferredPeriod(subject, secondPeriod)) {
           score += 10
         }
-      }
-    }
-
-    // ソフト制約: 同日に同科目を同クラスに配置するのを避ける（連続授業を除く）
-    if (!task.isConsecutive) {
-      const cdsKey = classDaySubjectKey(slot.day, assignment.classId, subject.id)
-      const existingCount = state.classDaySubjectCount.get(cdsKey) ?? 0
-      if (existingCount > 0) {
-        score -= 15 * existingCount
       }
     }
 
@@ -588,23 +627,6 @@ function calculateScore(
   if (preferredTotal > 0) {
     score += (preferredHits / preferredTotal) * 200
   }
-
-  // ソフト制約ペナルティ: 同日同科目の重複（最大 -100点）
-  const dayClassSubjectCounts = new Map<string, number>()
-  for (const entry of entries) {
-    if (entry.isConsecutiveSecond) continue
-    const assignment = assignmentMap.get(entry.assignmentId)
-    if (!assignment) continue
-    const subject = subjectMap.get(assignment.subjectId)
-    if (!subject || subject.isConsecutive) continue
-    const key = classDaySubjectKey(entry.day, entry.classId, subject.id)
-    dayClassSubjectCounts.set(key, (dayClassSubjectCounts.get(key) ?? 0) + 1)
-  }
-  let duplicates = 0
-  for (const count of dayClassSubjectCounts.values()) {
-    if (count > 1) duplicates += count - 1
-  }
-  score -= Math.min(duplicates * 15, 100)
 
   // ソフト制約ペナルティ: 教員1日あたりの過剰コマ数（最大 -100点）
   const teacherDayCounts = new Map<string, number>()

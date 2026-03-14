@@ -269,6 +269,11 @@ export function AssignmentList({
                           同時開講
                         </span>
                       )}
+                      {assignment.fixedSlots && assignment.fixedSlots.length > 0 && (
+                        <span className="badge border border-purple-200 bg-purple-50 text-purple-700">
+                          固定
+                        </span>
+                      )}
                     </div>
                   </td>
 
