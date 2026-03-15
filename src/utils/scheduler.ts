@@ -907,12 +907,46 @@ function greedyPlace(
 }
 
 // ============================================================
-// ローカル修復（Local Repair by Displacement）
+// ローカル修復（Local Repair by Chain Displacement）
 // ============================================================
 
+/** ボード状態のスナップショットを保存（チェーン置換のロールバック用） */
+function saveState(
+  state: BoardState,
+  placementMap: Map<string, PlacementRecord>,
+) {
+  return {
+    classGrid: new Map(state.classGrid),
+    teacherGrid: new Map(state.teacherGrid),
+    entries: [...state.entries],
+    assignmentPlacedCount: new Map(state.assignmentPlacedCount),
+    classDaySubjectCount: new Map(state.classDaySubjectCount),
+    teacherDayCount: new Map(state.teacherDayCount),
+    pm: new Map(placementMap),
+  }
+}
+
+/** スナップショットからボード状態を復元 */
+function loadState(
+  state: BoardState,
+  placementMap: Map<string, PlacementRecord>,
+  saved: ReturnType<typeof saveState>,
+): void {
+  state.classGrid = saved.classGrid
+  state.teacherGrid = saved.teacherGrid
+  state.entries = saved.entries
+  state.assignmentPlacedCount = saved.assignmentPlacedCount
+  state.classDaySubjectCount = saved.classDaySubjectCount
+  state.teacherDayCount = saved.teacherDayCount
+  placementMap.clear()
+  for (const [k, v] of saved.pm) {
+    placementMap.set(k, v)
+  }
+}
+
 /**
- * 未配置タスクを1つずつ、ブロッカーを別のスロットに移動して配置を試みる。
- * 単一レベルの置換のみ行う（チェーン置換はしない）。
+ * 未配置タスクを1つずつ修復する。
+ * チェーン置換（最大2段階の玉突き移動）で配置先を確保する。
  */
 function repairPhase(
   unplacedTasks: ScheduleTask[],
@@ -924,7 +958,7 @@ function repairPhase(
   const stillUnplaced: ScheduleTask[] = []
 
   for (const task of unplacedTasks) {
-    if (tryRepairTask(task, state, assignmentMap, maxTeacherPerDay, placementMap)) {
+    if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, 2, new Set())) {
       // 修復成功
     } else {
       stillUnplaced.push(task)
@@ -935,18 +969,26 @@ function repairPhase(
 }
 
 /**
- * 1つのタスクの修復を試みる。
- * 1. まず直接配置を試みる（前のパスでスキップされたタスクにより空きができた可能性）
- * 2. 各スロットについて、ブロッカーを移動して空きを作る
+ * タスクの配置先を探す（再帰的チェーン置換対応）。
+ * 1. 直接配置可能ならそこに配置
+ * 2. 各スロットでブロッカーを移動（maxDepth段階まで玉突き）して空きを作る
+ *
+ * 成功時: state が変更された状態で true を返す
+ * 失敗時: state は呼び出し前と同じ状態で false を返す
+ *
+ * @param maxDepth - 残り置換深度（0=直接配置のみ）
+ * @param excludedTasks - 置換対象外のタスク（循環防止）
  */
-function tryRepairTask(
+function tryRelocateTask(
   task: ScheduleTask,
   state: BoardState,
   assignmentMap: Map<string, Assignment>,
   maxTeacherPerDay: number,
   placementMap: Map<string, PlacementRecord>,
+  maxDepth: number,
+  excludedTasks: Set<ScheduleTask>,
 ): boolean {
-  // まず直接配置を試みる
+  // 直接配置を試みる（スナップショット不要）
   const candidates = getCandidateSlots(task, state)
   if (candidates.length > 0) {
     candidates.sort((a, b) =>
@@ -962,31 +1004,31 @@ function tryRepairTask(
     return true
   }
 
-  // 各スロットで置換を試みる
-  for (const day of DAYS) {
-    const periods = task.isConsecutive ? CONSECUTIVE_STARTS : PERIODS
+  // 深度0なら直接配置のみ
+  if (maxDepth <= 0) return false
+
+  // 各スロットでチェーン置換を試みる
+  const days = shuffleArray([...DAYS])
+  const periods = task.isConsecutive ? shuffleArray([...CONSECUTIVE_STARTS]) : shuffleArray([...PERIODS])
+
+  for (const day of days) {
     for (const period of periods) {
       const checkPeriods: Period[] = task.isConsecutive
         ? [period, (period + 1) as Period]
         : [period]
 
-      // 置換不可能なハード制約をチェック（教員の勤務日外、除外時限など）
+      // 置換不可能なハード制約チェック
       let hardBlock = false
       for (let i = 0; i < task.assignments.length && !hardBlock; i++) {
         const a = task.assignments[i]
         const s = task.subjects[i]
         const ts = task.teacherGroups[i]
 
-        // weeklyCount超過
         const pc = state.assignmentPlacedCount.get(a.id) ?? 0
         if (pc >= a.weeklyCount) { hardBlock = true; break }
 
         for (const p of checkPeriods) {
-          // 科目の配置不可時限
           if (isExcludedPeriodForSubject(s, p)) { hardBlock = true; break }
-          // 同日同科目禁止（ただしブロッカー除去後に解消する可能性があるのでスキップ）
-          // noConsecutive（隣接チェックもブロッカー除去後に変わりうるのでスキップ）
-          // 教員の勤務日外（置換不可能）
           for (const t of ts) {
             if (!isTeacherAvailable(t, day, p)) { hardBlock = true; break }
           }
@@ -995,7 +1037,7 @@ function tryRepairTask(
       }
       if (hardBlock) continue
 
-      // ブロッカーとなっている配置記録を収集
+      // ブロッカー収集
       const blockerRecords = new Set<PlacementRecord>()
       let blockerHardBlock = false
 
@@ -1008,7 +1050,9 @@ function tryRepairTask(
           if (!isSlotFreeForClass(state, day, p, a.classId)) {
             const rec = placementMap.get(cellKey(day, p, a.classId))
             if (rec) {
-              if (rec.task.fixedSlot) { blockerHardBlock = true; break }
+              if (rec.task.fixedSlot || excludedTasks.has(rec.task)) {
+                blockerHardBlock = true; break
+              }
               blockerRecords.add(rec)
             }
           }
@@ -1021,7 +1065,9 @@ function tryRepairTask(
                 if (blockAssignment) {
                   const rec = placementMap.get(cellKey(day, p, blockAssignment.classId))
                   if (rec) {
-                    if (rec.task.fixedSlot) { blockerHardBlock = true; break }
+                    if (rec.task.fixedSlot || excludedTasks.has(rec.task)) {
+                      blockerHardBlock = true; break
+                    }
                     blockerRecords.add(rec)
                   }
                 }
@@ -1034,10 +1080,11 @@ function tryRepairTask(
 
       if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > 2) continue
 
-      // ブロッカーを除去して置換を試みる
+      // スナップショットを保存してから状態を変更
+      const saved = saveState(state, placementMap)
       const blockerList = [...blockerRecords]
 
-      // 全ブロッカーを除去
+      // ブロッカーを除去
       for (const rec of blockerList) {
         removeEntries(rec.task, state, rec.entries)
         for (const e of rec.entries) {
@@ -1045,7 +1092,7 @@ function tryRepairTask(
         }
       }
 
-      // タスクを配置可能か確認
+      // タスク配置チェック
       const canNow = task.isConsecutive
         ? canPlaceTask(task, state, day, period) && canPlaceTask(task, state, day, (period + 1) as Period)
         : canPlaceTask(task, state, day, period)
@@ -1057,59 +1104,27 @@ function tryRepairTask(
           placementMap.set(cellKey(e.day, e.period, e.classId), ourRecord)
         }
 
-        // ブロッカーを別のスロットに再配置
-        let allReplaced = true
-        const replacedRecords: PlacementRecord[] = []
-
+        // ブロッカーを再帰的に再配置（循環防止: 自タスク + 兄弟ブロッカーを除外）
+        const newExcluded = new Set([...excludedTasks, task])
         for (const rec of blockerList) {
-          const btCandidates = getCandidateSlots(rec.task, state)
-          if (btCandidates.length > 0) {
-            btCandidates.sort((a, b) =>
-              scoreCandidateSlot(rec.task, b, state, maxTeacherPerDay) -
-              scoreCandidateSlot(rec.task, a, state, maxTeacherPerDay)
-            )
-            const re = placeTask(rec.task, state, btCandidates[0].day, btCandidates[0].period)
-            const newRec: PlacementRecord = {
-              task: rec.task, entries: re,
-              day: btCandidates[0].day, startPeriod: btCandidates[0].period,
-            }
-            for (const e of re) {
-              placementMap.set(cellKey(e.day, e.period, e.classId), newRec)
-            }
-            replacedRecords.push(newRec)
-          } else {
-            allReplaced = false
+          newExcluded.add(rec.task)
+        }
+
+        let allRelocated = true
+        for (const rec of blockerList) {
+          if (!tryRelocateTask(rec.task, state, assignmentMap, maxTeacherPerDay, placementMap, maxDepth - 1, newExcluded)) {
+            allRelocated = false
             break
           }
         }
 
-        if (allReplaced) {
-          return true // 修復成功
-        }
-
-        // 失敗: 全てを元に戻す
-        // 再配置したブロッカーを除去
-        for (const rec of replacedRecords) {
-          removeEntries(rec.task, state, rec.entries)
-          for (const e of rec.entries) {
-            placementMap.delete(cellKey(e.day, e.period, e.classId))
-          }
-        }
-        // 自タスクを除去
-        removeEntries(task, state, ourEntries)
-        for (const e of ourEntries) {
-          placementMap.delete(cellKey(e.day, e.period, e.classId))
+        if (allRelocated) {
+          return true // チェーン置換成功！
         }
       }
 
-      // ブロッカーを元の位置に復元
-      for (const rec of blockerList) {
-        const re = placeTask(rec.task, state, rec.day, rec.startPeriod)
-        const restoredRec: PlacementRecord = { task: rec.task, entries: re, day: rec.day, startPeriod: rec.startPeriod }
-        for (const e of re) {
-          placementMap.set(cellKey(e.day, e.period, e.classId), restoredRec)
-        }
-      }
+      // 失敗: スナップショットから完全復元
+      loadState(state, placementMap, saved)
     }
   }
 
