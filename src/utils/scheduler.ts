@@ -1078,7 +1078,7 @@ function tryRelocateTask(
         }
       }
 
-      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > 2) continue
+      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > 3) continue
 
       // スナップショットを保存してから状態を変更
       const saved = saveState(state, placementMap)
@@ -1182,6 +1182,9 @@ export function* generateSchedule(
     unplacedTasks: [],
   }
 
+  // 前パスで未配置だったタスクを追跡（優先リスタート用）
+  let previousUnplacedTasks: ScheduleTask[] = []
+
   for (let pass = 0; pass < totalPasses; pass++) {
     // 完全解が見つかっていれば終了
     if (bestResult.isComplete) break
@@ -1195,6 +1198,11 @@ export function* generateSchedule(
     if (pass === 0) {
       // 初回: 優先度順（制約が厳しいものから）
       tasks = [...allTasks]
+    } else if (pass % 3 === 1 && previousUnplacedTasks.length > 0) {
+      // 3パスに1回: 前パスの未配置タスクを最優先で配置し、残りをシャッフル
+      const unplacedSet = new Set(previousUnplacedTasks)
+      const otherNonFixed = nonFixedTasks.filter((t) => !unplacedSet.has(t))
+      tasks = [...fixedTasks, ...previousUnplacedTasks, ...shuffleArray(otherNonFixed)]
     } else {
       // リスタート: 固定スロットを先頭に保ち、残りをシャッフル
       tasks = [...fixedTasks, ...shuffleArray(nonFixedTasks)]
@@ -1212,8 +1220,16 @@ export function* generateSchedule(
     // フェーズ2: 未配置タスクを再度MRVで配置試行（他のタスクのスキップで空きができた可能性）
     const unplaced2 = greedyPlace(unplaced1, state, maxTeacherPerDay, true, placementMap, 1)
 
-    // フェーズ3: ローカル修復（ブロッカーの移動で空きを作る）
-    const finalUnplaced = repairPhase(unplaced2, state, assignmentMap, maxTeacherPerDay, placementMap)
+    // フェーズ3: ローカル修復（チェーン置換）を複数ラウンド実行
+    // 1回の修復成功で空きが連鎖的に増え、次のラウンドで別のタスクも配置可能になる
+    let repairInput = unplaced2
+    const MAX_REPAIR_ROUNDS = 3
+    for (let round = 0; round < MAX_REPAIR_ROUNDS && repairInput.length > 0; round++) {
+      const result = repairPhase(repairInput, state, assignmentMap, maxTeacherPerDay, placementMap)
+      if (result.length === repairInput.length) break // 改善なし → 打ち切り
+      repairInput = result
+    }
+    const finalUnplaced = repairInput
 
     // スコア計算
     const score = calculateScore(
@@ -1224,6 +1240,9 @@ export function* generateSchedule(
     // ベスト解の更新（配置数優先、同数ならスコア比較）
     const placedCount = state.entries.filter((e) => !e.isConsecutiveSecond).length
     const bestPlacedCount = bestResult.entries.filter((e) => !e.isConsecutiveSecond).length
+
+    // 未配置タスクを次パス用に記録
+    previousUnplacedTasks = finalUnplaced
 
     if (placedCount > bestPlacedCount || (placedCount === bestPlacedCount && score > bestResult.score)) {
       bestResult = {
