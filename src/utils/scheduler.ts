@@ -485,8 +485,10 @@ function canPlaceSingle(
   // クラス重複チェック
   if (!isSlotFreeForClass(state, day, period, classId)) return false
 
-  // 同日同科目禁止（連続授業を除く）: 同じクラスで同じ日に同じ科目は配置不可
-  if (!subject.isConsecutive) {
+  // 同日同科目禁止: 同じクラスで同じ日に同じ科目は配置不可
+  // 連続授業は同日2コマが前提なのでスキップ。ただし spreadDays の場合は
+  // 連続授業でも同日に複数ペア配置しない（例: 家庭基礎4単位を2コマ×別日に分散）
+  if (!subject.isConsecutive || subject.spreadDays) {
     const cdsKey = classDaySubjectKey(day, classId, subject.id)
     if ((state.classDaySubjectCount.get(cdsKey) ?? 0) > 0) return false
   }
@@ -526,6 +528,18 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
     if (subject.noConsecutive) {
       if (hasAdjacentSameSubject(state, slot.day, slot.period, assignment.classId, assignment.id)) {
         score -= 100
+      }
+    }
+
+    // ソフト制約: spreadDays — 隣接曜日に同科目がある場合は減点
+    if (subject.spreadDays) {
+      const dayIdx = DAYS.indexOf(slot.day)
+      for (const adjDay of [DAYS[dayIdx - 1], DAYS[dayIdx + 1]]) {
+        if (!adjDay) continue
+        const adjCdsKey = classDaySubjectKey(adjDay, assignment.classId, subject.id)
+        if ((state.classDaySubjectCount.get(adjCdsKey) ?? 0) > 0) {
+          score -= 15
+        }
       }
     }
 
@@ -1240,7 +1254,7 @@ function generatePlacementSuggestions(
           if (subject.noConsecutive && hasAdjacentSameSubject(state, day, p, assignment.classId, assignment.id)) {
             hardBlocked = true; break
           }
-          if (!subject.isConsecutive) {
+          if (!subject.isConsecutive || subject.spreadDays) {
             const cdsKey = classDaySubjectKey(day, assignment.classId, subject.id)
             if ((state.classDaySubjectCount.get(cdsKey) ?? 0) > 0) { hardBlocked = true; break }
           }

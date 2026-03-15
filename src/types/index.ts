@@ -117,6 +117,13 @@ export interface Subject {
   color?: string
   /** 配置不可時限（この時限には絶対に配置しない） */
   excludedPeriods?: Period[]
+  /**
+   * 曜日分散フラグ。
+   * trueの場合、同じ科目を同日に複数回配置しない（連続授業含む）。
+   * また、隣接曜日への配置をソフト制約として回避する。
+   * 例: 体育を月・水に分散、家庭基礎4単位を2コマ×別日に配置
+   */
+  spreadDays?: boolean
   createdAt: Date
   updatedAt: Date
 }

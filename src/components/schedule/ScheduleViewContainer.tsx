@@ -604,11 +604,11 @@ export function ScheduleViewContainer({
                 )}
               </span>
             </div>
-            <div className="h-1.5 w-full rounded-full bg-gray-200" role="progressbar" aria-valuenow={progress.placed} aria-valuemin={0} aria-valuemax={progress.total}>
+            <div className="h-1.5 w-full rounded-full bg-gray-200 overflow-hidden" role="progressbar" aria-valuenow={progress.placed} aria-valuemin={0} aria-valuemax={progress.total}>
               <div
                 className="h-1.5 rounded-full bg-primary-500 transition-all duration-300"
                 style={{
-                  width: `${Math.round((progress.placed / Math.max(progress.total, 1)) * 100)}%`,
+                  width: `${Math.min(100, Math.round((progress.placed / Math.max(progress.total, 1)) * 100))}%`,
                 }}
               />
             </div>

@@ -15,6 +15,7 @@ interface FormState {
   preferredFrom: Period
   preferredTo: Period
   excludedPeriods: Period[]
+  spreadDays: boolean
   color: string
 }
 
@@ -72,6 +73,7 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
     preferredFrom: initialValues?.preferredPeriods?.from ?? 1,
     preferredTo: initialValues?.preferredPeriods?.to ?? 4,
     excludedPeriods: initialValues?.excludedPeriods ?? [],
+    spreadDays: initialValues?.spreadDays ?? false,
     color: initialValues?.color ?? SUBJECT_COLORS[0].value,
   })
   const [submitting, setSubmitting] = useState(false)
@@ -119,6 +121,7 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
         ...(form.excludedPeriods.length > 0
           ? { excludedPeriods: [...form.excludedPeriods].sort((a, b) => a - b) }
           : {}),
+        ...(form.spreadDays ? { spreadDays: true } : {}),
         color: form.color,
       })
     } catch (err) {
@@ -253,6 +256,18 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
         {form.noConsecutive && (
           <p className="ml-14 -mt-2 text-xs text-gray-400">
             同じ日の連続する時限に配置されないよう制約します（例: 1限と2限に入れない）
+          </p>
+        )}
+
+        <Toggle
+          checked={form.spreadDays}
+          onChange={() => setForm((p) => ({ ...p, spreadDays: !p.spreadDays }))}
+          label="曜日分散（別の日に分けて配置）"
+        />
+        {form.spreadDays && (
+          <p className="ml-14 -mt-2 text-xs text-gray-400">
+            同じ科目を同日に複数回配置しません。また隣接曜日（月→火等）を避けて分散します。
+            例: 体育を月・水に配置、家庭基礎4単位を2コマ×別日に配置
           </p>
         )}
 
