@@ -92,6 +92,9 @@ function docToSubject(snap: QueryDocumentSnapshot): Subject {
       ? { excludedPeriods: d.excludedPeriods as Subject['excludedPeriods'] }
       : {}),
     ...(d.spreadDays === true ? { spreadDays: true } : {}),
+    ...(Array.isArray(d.tags) && d.tags.length > 0
+      ? { tags: d.tags as string[] }
+      : {}),
     createdAt: (d.createdAt as Timestamp).toDate(),
     updatedAt: (d.updatedAt as Timestamp).toDate(),
   }
@@ -127,6 +130,9 @@ export async function addSubject(input: CreateInput<Subject>): Promise<Subject> 
       ? { excludedPeriods: input.excludedPeriods }
       : {}),
     ...(input.spreadDays === true ? { spreadDays: true } : {}),
+    ...(input.tags !== undefined && input.tags.length > 0
+      ? { tags: input.tags }
+      : {}),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   })

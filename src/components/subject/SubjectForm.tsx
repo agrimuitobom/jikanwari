@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import type { Subject, CreateInput, Period, Grade, SubjectCategory } from '../../types'
 import { ErrorAlert } from '../common/ErrorAlert'
 import { PERIODS, GRADES, GRADE_LABELS, SUBJECT_CATEGORIES, SUBJECT_COLORS } from '../../utils/constants'
@@ -16,11 +16,15 @@ interface FormState {
   preferredTo: Period
   excludedPeriods: Period[]
   spreadDays: boolean
+  tags: string[]
+  tagInput: string
   color: string
 }
 
 interface SubjectFormProps {
   initialValues?: Subject
+  /** 既存の全科目から収集したタグ一覧（候補表示用） */
+  existingTags?: string[]
   onSubmit: (data: CreateInput<Subject>) => Promise<void>
   onCancel: () => void
 }
@@ -55,10 +59,118 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () =
 }
 
 // ============================================================
+// TagInput（既存タグ候補 + 自由入力）
+// ============================================================
+
+function TagInput({
+  value,
+  onChange,
+  existingTags,
+  selectedTags,
+  onAdd,
+}: {
+  value: string
+  onChange: (v: string) => void
+  existingTags: string[]
+  selectedTags: string[]
+  onAdd: (tag: string) => void
+}) {
+  const [showSuggestions, setShowSuggestions] = useState(false)
+
+  // 未選択の既存タグから候補をフィルタ
+  const suggestions = useMemo(() => {
+    const available = existingTags.filter((t) => !selectedTags.includes(t))
+    if (!value.trim()) return available
+    return available.filter((t) => t.toLowerCase().includes(value.toLowerCase()))
+  }, [existingTags, selectedTags, value])
+
+  const addTag = (tag: string) => {
+    const trimmed = tag.trim()
+    if (trimmed && !selectedTags.includes(trimmed)) {
+      onAdd(trimmed)
+    }
+    setShowSuggestions(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (value.trim()) addTag(value)
+    }
+  }
+
+  // 未選択の既存タグがあるかどうか
+  const hasUnselected = existingTags.some((t) => !selectedTags.includes(t))
+
+  return (
+    <div className="relative">
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => { onChange(e.target.value); setShowSuggestions(true) }}
+          onFocus={() => setShowSuggestions(true)}
+          onKeyDown={handleKeyDown}
+          placeholder="タグを入力（Enterで追加）"
+          className="form-input flex-1"
+        />
+        {value.trim() && (
+          <button
+            type="button"
+            onClick={() => addTag(value)}
+            className="btn-secondary shrink-0"
+          >
+            追加
+          </button>
+        )}
+      </div>
+
+      {/* 候補ドロップダウン */}
+      {showSuggestions && suggestions.length > 0 && (
+        <div className="absolute z-10 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg max-h-40 overflow-y-auto">
+          {suggestions.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => addTag(tag)}
+              className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-primary-50 hover:text-primary-700"
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 既存タグがある場合のクイック追加ボタン */}
+      {!showSuggestions && hasUnselected && !value && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {existingTags
+            .filter((t) => !selectedTags.includes(t))
+            .map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => addTag(tag)}
+                className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs text-gray-500 hover:border-primary-300 hover:bg-primary-50 hover:text-primary-600 transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
+                  <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
+                </svg>
+                {tag}
+              </button>
+            ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
 // SubjectForm
 // ============================================================
 
-export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormProps) {
+export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCancel }: SubjectFormProps) {
   const isEditMode = !!initialValues
 
   const [form, setForm] = useState<FormState>({
@@ -74,6 +186,8 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
     preferredTo: initialValues?.preferredPeriods?.to ?? 4,
     excludedPeriods: initialValues?.excludedPeriods ?? [],
     spreadDays: initialValues?.spreadDays ?? false,
+    tags: initialValues?.tags ?? [],
+    tagInput: '',
     color: initialValues?.color ?? SUBJECT_COLORS[0].value,
   })
   const [submitting, setSubmitting] = useState(false)
@@ -122,6 +236,7 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
           ? { excludedPeriods: [...form.excludedPeriods].sort((a, b) => a - b) }
           : {}),
         ...(form.spreadDays ? { spreadDays: true } : {}),
+        ...(form.tags.length > 0 ? { tags: form.tags } : {}),
         color: form.color,
       })
     } catch (err) {
@@ -362,7 +477,51 @@ export function SubjectForm({ initialValues, onSubmit, onCancel }: SubjectFormPr
         </div>
       </section>
 
-      {/* ── セクション 3: 表示カラー ── */}
+      {/* ── セクション 3: タグ ── */}
+      <section className="space-y-3">
+        <h3 className="section-heading">タグ</h3>
+        <p className="text-xs text-gray-400">
+          学科・コースなどの分類タグを設定すると、科目一覧や授業割当で絞り込みに使えます（任意）
+        </p>
+
+        {/* 追加済みタグ */}
+        {form.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {form.tags.map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex items-center gap-1 rounded-full bg-primary-50 border border-primary-200 px-2.5 py-0.5 text-xs font-medium text-primary-700"
+              >
+                {tag}
+                <button
+                  type="button"
+                  onClick={() => setForm((p) => ({ ...p, tags: p.tags.filter((t) => t !== tag) }))}
+                  className="ml-0.5 text-primary-400 hover:text-primary-600"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
+                    <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+                  </svg>
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* タグ入力 */}
+        <TagInput
+          value={form.tagInput}
+          onChange={(v) => setForm((p) => ({ ...p, tagInput: v }))}
+          existingTags={existingTags}
+          selectedTags={form.tags}
+          onAdd={(tag) => setForm((p) => ({
+            ...p,
+            tags: [...p.tags, tag],
+            tagInput: '',
+          }))}
+        />
+      </section>
+
+      {/* ── セクション 4: 表示カラー ── */}
       <section>
         <h3 className="section-heading">表示カラー</h3>
         <div className="flex flex-wrap gap-2">

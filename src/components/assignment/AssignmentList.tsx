@@ -26,6 +26,7 @@ export function AssignmentList({
   const [filterClass, setFilterClass] = useState('')
   const [filterCategory, setFilterCategory] = useState<SubjectCategory | ''>('')
   const [filterTeacher, setFilterTeacher] = useState('')
+  const [filterTag, setFilterTag] = useState('')
 
   const teacherMap = Object.fromEntries(teachers.map((t) => [t.id, t]))
   const subjectMap = Object.fromEntries(subjects.map((s) => [s.id, s]))
@@ -39,7 +40,7 @@ export function AssignmentList({
     }
   }
 
-  const hasFilter = !!(filterClass || filterCategory || filterTeacher)
+  const hasFilter = !!(filterClass || filterCategory || filterTeacher || filterTag)
 
   const sortedAssignments = useMemo(() => {
     let filtered = assignments
@@ -51,6 +52,9 @@ export function AssignmentList({
     }
     if (filterTeacher) {
       filtered = filtered.filter((a) => a.teacherIds.includes(filterTeacher))
+    }
+    if (filterTag) {
+      filtered = filtered.filter((a) => subjectMap[a.subjectId]?.tags?.includes(filterTag))
     }
     const dir = sortDir === 'asc' ? 1 : -1
     return [...filtered].sort((a, b) => {
@@ -80,7 +84,7 @@ export function AssignmentList({
       }
       return cmp * dir
     })
-  }, [assignments, sortKey, sortDir, subjectMap, teacherMap, filterClass, filterCategory, filterTeacher])
+  }, [assignments, sortKey, sortDir, subjectMap, teacherMap, filterClass, filterCategory, filterTeacher, filterTag])
 
   const SortIcon = ({ column }: { column: SortKey }) => {
     const active = sortKey === column
@@ -142,6 +146,16 @@ export function AssignmentList({
       .sort((a, b) => a.name.localeCompare(b.name, 'ja'))
   }, [assignments, teachers])
 
+  // タグ選択肢（使用中のもののみ）
+  const usedTags = useMemo(() => {
+    const tagSet = new Set<string>()
+    for (const a of assignments) {
+      const s = subjectMap[a.subjectId]
+      if (s?.tags) s.tags.forEach((t) => tagSet.add(t))
+    }
+    return [...tagSet].sort((a, b) => a.localeCompare(b, 'ja'))
+  }, [assignments, subjectMap])
+
   return (
     <div className="space-y-3">
       {/* フィルタバー */}
@@ -183,10 +197,23 @@ export function AssignmentList({
           ))}
         </select>
 
+        {usedTags.length > 0 && (
+          <select
+            value={filterTag}
+            onChange={(e) => setFilterTag(e.target.value)}
+            className="form-select rounded-lg border-gray-200 py-1.5 text-sm"
+          >
+            <option value="">全タグ</option>
+            {usedTags.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
+
         {hasFilter && (
           <button
             type="button"
-            onClick={() => { setFilterClass(''); setFilterCategory(''); setFilterTeacher('') }}
+            onClick={() => { setFilterClass(''); setFilterCategory(''); setFilterTeacher(''); setFilterTag('') }}
             className="text-xs text-gray-500 hover:text-gray-700 underline"
           >
             フィルタ解除

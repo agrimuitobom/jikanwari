@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react'
 import type { Teacher, Subject, SubjectCategory, Assignment, CreateInput } from './types'
 
 import { useAuth } from './hooks/useAuth'
@@ -243,6 +243,15 @@ function SubjectSection() {
   const [showForm, setShowForm] = useState(false)
   const [showCsvImport, setShowCsvImport] = useState(false)
 
+  // 全科目から既存タグを収集（重複排除・ソート済み）
+  const existingTags = useMemo(() => {
+    const tagSet = new Set<string>()
+    for (const s of subjects) {
+      if (s.tags) s.tags.forEach((t) => tagSet.add(t))
+    }
+    return [...tagSet].sort((a, b) => a.localeCompare(b, 'ja'))
+  }, [subjects])
+
   const openCreate = () => {
     setEditTarget(null)
     setShowForm(true)
@@ -300,6 +309,7 @@ function SubjectSection() {
         <div className="card p-6 sm:p-8">
           <SubjectForm
             initialValues={editTarget ?? undefined}
+            existingTags={existingTags}
             onSubmit={handleSubmit}
             onCancel={closeForm}
           />

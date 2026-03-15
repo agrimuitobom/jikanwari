@@ -13,6 +13,7 @@ export function SubjectList({ subjects, assignments, onEdit, onDelete }: Subject
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [filterGrade, setFilterGrade] = useState<Grade | 'all'>('all')
   const [filterCategory, setFilterCategory] = useState<SubjectCategory | 'all'>('all')
+  const [filterTag, setFilterTag] = useState('')
 
   const filtered = useMemo(() => {
     let result = subjects
@@ -21,6 +22,9 @@ export function SubjectList({ subjects, assignments, onEdit, onDelete }: Subject
     }
     if (filterCategory !== 'all') {
       result = result.filter((s) => s.category === filterCategory)
+    }
+    if (filterTag) {
+      result = result.filter((s) => s.tags?.includes(filterTag))
     }
     // Sort by category (SUBJECT_CATEGORIES order), then grade, then name
     const categoryOrder = new Map(SUBJECT_CATEGORIES.map((c, i) => [c, i]))
@@ -31,12 +35,21 @@ export function SubjectList({ subjects, assignments, onEdit, onDelete }: Subject
       if (a.grade !== b.grade) return a.grade - b.grade
       return a.name.localeCompare(b.name)
     })
-  }, [subjects, filterGrade, filterCategory])
+  }, [subjects, filterGrade, filterCategory, filterTag])
 
   // Gather categories actually in use for the dropdown
   const usedCategories = useMemo(() => {
     const cats = new Set(subjects.map((s) => s.category))
     return SUBJECT_CATEGORIES.filter((c) => cats.has(c))
+  }, [subjects])
+
+  // 使用中のタグ一覧
+  const usedTags = useMemo(() => {
+    const tagSet = new Set<string>()
+    for (const s of subjects) {
+      if (s.tags) s.tags.forEach((t) => tagSet.add(t))
+    }
+    return [...tagSet].sort((a, b) => a.localeCompare(b, 'ja'))
   }, [subjects])
 
   if (subjects.length === 0) {
@@ -90,6 +103,27 @@ export function SubjectList({ subjects, assignments, onEdit, onDelete }: Subject
             </option>
           ))}
         </select>
+        {usedTags.length > 0 && (
+          <select
+            value={filterTag}
+            onChange={(e) => setFilterTag(e.target.value)}
+            className="form-select py-1.5 text-sm"
+          >
+            <option value="">全タグ</option>
+            {usedTags.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
+        {(filterGrade !== 'all' || filterCategory !== 'all' || filterTag) && (
+          <button
+            type="button"
+            onClick={() => { setFilterGrade('all'); setFilterCategory('all'); setFilterTag('') }}
+            className="text-xs text-gray-500 hover:text-gray-700 underline"
+          >
+            リセット
+          </button>
+        )}
         <span className="ml-auto text-xs text-gray-400">
           {filtered.length} / {subjects.length} 件
         </span>
@@ -172,6 +206,11 @@ export function SubjectList({ subjects, assignments, onEdit, onDelete }: Subject
                       {subject.excludedPeriods.join('・')}限不可
                     </span>
                   )}
+                  {subject.tags?.map((tag) => (
+                    <span key={tag} className="badge border border-primary-200 bg-primary-50 text-primary-700">
+                      {tag}
+                    </span>
+                  ))}
                 </div>
 
                 {/* 削除確認 */}
