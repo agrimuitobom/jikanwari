@@ -243,6 +243,32 @@ export function ScheduleViewContainer({
     }
   }, [teachers, subjects, assignments, schedulerOptions, schedules.length, saveSchedule])
 
+  // ---- 部分再生成（手動配置済みを固定して残りだけ再生成） ----
+  const handlePartialRegenerate = useCallback(async () => {
+    if (assignments.length === 0 || entries.length === 0) return
+
+    setIsRunning(true)
+    setProgress(null)
+    undoStackRef.current = []
+
+    try {
+      const res = await runSchedulerInWorker(teachers, subjects, assignments, (p) => {
+        setProgress(p)
+      }, { ...schedulerOptions, lockedEntries: entries })
+
+      setEntries(res.entries)
+      setUnplacedTasks(res.unplacedTasks)
+      setResult(res)
+
+      // 部分再生成結果を自動保存
+      const name = `案${schedules.length + 1}(部分再生成)`
+      const saved = await saveSchedule(name, res, res.unplacedTasks)
+      setActiveScheduleId(saved.id)
+    } finally {
+      setIsRunning(false)
+    }
+  }, [teachers, subjects, assignments, entries, schedulerOptions, schedules.length, saveSchedule])
+
   // ---- 保存済みスケジュールの復元 ----
   const handleRestoreSchedule = useCallback((scheduleId: string) => {
     const sched = schedules.find((s) => s.id === scheduleId)
@@ -446,6 +472,34 @@ export function ScheduleViewContainer({
               </>
             )}
           </button>
+
+          {/* 部分再生成ボタン */}
+          {entries.length > 0 && unplacedTasks.length > 0 && (
+            <button
+              type="button"
+              onClick={handlePartialRegenerate}
+              disabled={isRunning}
+              className="btn-secondary"
+              title="配置済みのコマを固定したまま、未配置の授業だけを再生成します"
+            >
+              {isRunning ? (
+                <>
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  再生成中...
+                </>
+              ) : (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                    <path fillRule="evenodd" d="M13.836 2.477a.75.75 0 0 1 .75.75v3.182a.75.75 0 0 1-.75.75h-3.182a.75.75 0 0 1 0-1.5h1.37l-.84-.841a4.5 4.5 0 0 0-7.08.932.75.75 0 0 1-1.3-.75 6 6 0 0 1 9.44-1.242l.842.84V3.227a.75.75 0 0 1 .75-.75Zm-.911 7.5A.75.75 0 0 1 13.199 11a6 6 0 0 1-9.44 1.241l-.84-.84v1.371a.75.75 0 0 1-1.5 0V9.591a.75.75 0 0 1 .75-.75H5.35a.75.75 0 0 1 0 1.5H3.98l.841.841a4.5 4.5 0 0 0 7.08-.932.75.75 0 0 1 1.025-.273Z" clipRule="evenodd" />
+                  </svg>
+                  部分再生成
+                </>
+              )}
+            </button>
+          )}
 
           {/* 区切り線 */}
           <div className="h-8 w-px bg-gray-200" />

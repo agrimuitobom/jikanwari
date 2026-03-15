@@ -63,6 +63,21 @@ function UnplacedCard({
       <div className="mt-1.5 text-[10px] text-red-400 leading-tight">
         {task.reason}
       </div>
+      {task.suggestions && task.suggestions.length > 0 && (
+        <div className="mt-1.5 border-t border-gray-100 pt-1.5 space-y-0.5">
+          <div className="text-[10px] font-medium text-blue-500 flex items-center gap-1">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
+              <path d="M8 1.5A4.5 4.5 0 0 0 3.5 6c0 1.56.806 2.933 2.024 3.727a1.5 1.5 0 0 1 .476.39V11.5h4v-1.382a1.5 1.5 0 0 1 .476-.391A4.5 4.5 0 0 0 8 1.5ZM6 13a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-.5H6V13Z" />
+            </svg>
+            改善案
+          </div>
+          {task.suggestions.map((s, i) => (
+            <div key={i} className="text-[10px] text-blue-400 leading-tight pl-3.5">
+              {s}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

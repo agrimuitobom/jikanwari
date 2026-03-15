@@ -7,7 +7,7 @@ import type {
   Period,
   TimeSlot,
 } from '../types'
-import { DAYS, PERIODS } from './constants'
+import { DAYS, PERIODS, DAY_LABELS, getClassLabel } from './constants'
 
 // ============================================================
 // 公開インターフェース
@@ -45,6 +45,8 @@ export interface UnplacedTask {
   classId: string
   subjectId: string
   reason: string
+  /** 配置可能にするための具体的な提案 */
+  suggestions?: string[]
 }
 
 // ============================================================
@@ -86,6 +88,8 @@ export interface SchedulerOptions {
   maxIterations?: number
   /** ランダムリスタート回数（0=リスタートなし） */
   maxRestarts?: number
+  /** 固定する既存エントリ（部分再生成時に使用） */
+  lockedEntries?: ScheduleEntry[]
 }
 
 /** 配置状態の管理 */
@@ -1132,6 +1136,139 @@ function tryRelocateTask(
 }
 
 // ============================================================
+// ロック済みエントリの事前配置（部分再生成用）
+// ============================================================
+
+/** 既存エントリをボード状態に事前配置する */
+function prePlaceLockedEntries(
+  lockedEntries: ScheduleEntry[],
+  state: BoardState,
+  assignmentMap: Map<string, Assignment>,
+  subjectMap: Map<string, Subject>,
+  teacherMap: Map<string, Teacher>,
+): void {
+  for (const entry of lockedEntries) {
+    const assignment = assignmentMap.get(entry.assignmentId)
+    if (!assignment) continue
+    const subject = subjectMap.get(assignment.subjectId)
+
+    state.classGrid.set(cellKey(entry.day, entry.period, entry.classId), entry.assignmentId)
+
+    for (const teacherId of assignment.teacherIds) {
+      const teacher = teacherMap.get(teacherId)
+      if (!teacher) continue
+      state.teacherGrid.set(cellKey(entry.day, entry.period, teacherId), entry.assignmentId)
+      const tdKey = teacherDayKey(entry.day, teacherId)
+      state.teacherDayCount.set(tdKey, (state.teacherDayCount.get(tdKey) ?? 0) + 1)
+    }
+
+    state.assignmentPlacedCount.set(
+      entry.assignmentId,
+      (state.assignmentPlacedCount.get(entry.assignmentId) ?? 0) + 1,
+    )
+
+    if (subject) {
+      const cdsKey = classDaySubjectKey(entry.day, entry.classId, subject.id)
+      state.classDaySubjectCount.set(cdsKey, (state.classDaySubjectCount.get(cdsKey) ?? 0) + 1)
+    }
+
+    state.entries.push({ ...entry })
+  }
+}
+
+// ============================================================
+// 配置提案の生成（未配置タスクに対する具体的な解決策）
+// ============================================================
+
+/** 未配置タスクに対して「何を変えれば配置できるか」を分析する */
+function generatePlacementSuggestions(
+  task: ScheduleTask,
+  state: BoardState,
+  assignmentMap: Map<string, Assignment>,
+  subjectMap: Map<string, Subject>,
+): string[] {
+  const suggestions: string[] = []
+
+  for (let ai = 0; ai < task.assignments.length; ai++) {
+    const assignment = task.assignments[ai]
+    const subject = task.subjects[ai]
+    const teachers = task.teacherGroups[ai]
+
+    const pc = state.assignmentPlacedCount.get(assignment.id) ?? 0
+    if (pc >= assignment.weeklyCount) continue
+
+    const analyses: { blockers: string[] }[] = []
+
+    for (const day of DAYS) {
+      const periodsToCheck = task.isConsecutive ? CONSECUTIVE_STARTS : PERIODS
+      for (const period of periodsToCheck) {
+        const checkPeriods: Period[] = task.isConsecutive
+          ? [period, (period + 1) as Period]
+          : [period]
+
+        const blockers: string[] = []
+        let hardBlocked = false
+
+        for (const p of checkPeriods) {
+          if (isExcludedPeriodForSubject(subject, p)) { hardBlocked = true; break }
+
+          if (!isSlotFreeForClass(state, day, p, assignment.classId)) {
+            const blockAid = state.classGrid.get(cellKey(day, p, assignment.classId))
+            if (blockAid) {
+              const blockA = assignmentMap.get(blockAid)
+              const blockS = blockA ? subjectMap.get(blockA.subjectId) : null
+              blockers.push(`${getClassLabel(assignment.classId)}の${DAY_LABELS[day]}${p}限（${blockS?.name ?? '授業'}）を移動`)
+            }
+          }
+
+          for (const teacher of teachers) {
+            if (!teacher.availableDays.includes(day)) {
+              blockers.push(`${teacher.name}の${DAY_LABELS[day]}曜を勤務可能に変更`)
+            } else if (teacher.excludedSlots.some((s: TimeSlot) => s.day === day && s.period === p)) {
+              blockers.push(`${teacher.name}の${DAY_LABELS[day]}${p}限の除外を解除`)
+            } else if (!isSlotFreeForTeacher(state, day, p, teacher.id)) {
+              const blockAid = state.teacherGrid.get(cellKey(day, p, teacher.id))
+              if (blockAid) {
+                const blockA = assignmentMap.get(blockAid)
+                const blockS = blockA ? subjectMap.get(blockA.subjectId) : null
+                const classLabel = blockA ? getClassLabel(blockA.classId) : ''
+                blockers.push(`${teacher.name}の${DAY_LABELS[day]}${p}限（${classLabel} ${blockS?.name ?? ''}）を移動`)
+              }
+            }
+          }
+
+          if (subject.noConsecutive && hasAdjacentSameSubject(state, day, p, assignment.classId, assignment.id)) {
+            hardBlocked = true; break
+          }
+          if (!subject.isConsecutive) {
+            const cdsKey = classDaySubjectKey(day, assignment.classId, subject.id)
+            if ((state.classDaySubjectCount.get(cdsKey) ?? 0) > 0) { hardBlocked = true; break }
+          }
+        }
+
+        if (!hardBlocked && blockers.length > 0 && blockers.length <= 3) {
+          analyses.push({ blockers: [...new Set(blockers)] })
+        }
+      }
+    }
+
+    analyses.sort((a, b) => a.blockers.length - b.blockers.length)
+
+    const seen = new Set<string>()
+    for (const analysis of analyses) {
+      const text = analysis.blockers.join(' かつ ')
+      if (!seen.has(text)) {
+        seen.add(text)
+        suggestions.push(text)
+      }
+      if (suggestions.length >= 3) break
+    }
+  }
+
+  return suggestions
+}
+
+// ============================================================
 // メイン: 貪欲配置 + ローカル修復スケジューラ（ジェネレータ）
 // ============================================================
 
@@ -1151,8 +1288,41 @@ export function* generateSchedule(
   const subjectMap = new Map(subjects.map((s) => [s.id, s]))
   const assignmentMap = new Map(assignments.map((a) => [a.id, a]))
 
-  // タスク生成
-  const allTasks = buildTasks(assignments, subjectMap, teacherMap)
+  // ロック済みエントリの処理（部分再生成用）
+  const lockedEntries = options?.lockedEntries ?? []
+  let effectiveAssignments = assignments
+
+  if (lockedEntries.length > 0) {
+    // ロック済みエントリから各割当の配置済みコマ数をカウント
+    const lockedCountByAssignment = new Map<string, number>()
+    for (const entry of lockedEntries) {
+      lockedCountByAssignment.set(
+        entry.assignmentId,
+        (lockedCountByAssignment.get(entry.assignmentId) ?? 0) + 1,
+      )
+    }
+
+    // weeklyCount を減算し、配置済みの fixedSlots を除外
+    effectiveAssignments = assignments
+      .map((a) => {
+        const lockedCount = lockedCountByAssignment.get(a.id) ?? 0
+        if (lockedCount <= 0) return a
+        const remainingWeekly = Math.max(0, a.weeklyCount - lockedCount)
+        const lockedSlots = lockedEntries.filter((e) => e.assignmentId === a.id)
+        const remainingFixed = (a.fixedSlots ?? []).filter(
+          (fs) => !lockedSlots.some((le) => le.day === fs.day && le.period === fs.period),
+        )
+        return {
+          ...a,
+          weeklyCount: remainingWeekly,
+          fixedSlots: remainingFixed.length > 0 ? remainingFixed : undefined,
+        }
+      })
+      .filter((a) => a.weeklyCount > 0)
+  }
+
+  // タスク生成（ロック済み分を除外した残りのみ）
+  const allTasks = buildTasks(effectiveAssignments, subjectMap, teacherMap)
   const totalTasks = allTasks.length
 
   if (totalTasks === 0) {
@@ -1192,6 +1362,11 @@ export function* generateSchedule(
     // ボード状態を初期化
     const state = createEmptyState()
     const placementMap = new Map<string, PlacementRecord>()
+
+    // ロック済みエントリを事前配置
+    if (lockedEntries.length > 0) {
+      prePlaceLockedEntries(lockedEntries, state, assignmentMap, subjectMap, teacherMap)
+    }
 
     // タスク順序の決定
     let tasks: ScheduleTask[]
@@ -1249,7 +1424,11 @@ export function* generateSchedule(
         entries: [...state.entries],
         score,
         isComplete: finalUnplaced.length === 0,
-        unplacedTasks: finalUnplaced.flatMap((t) => diagnoseUnplaced(t, state)),
+        unplacedTasks: finalUnplaced.flatMap((t) => {
+          const diagnosed = diagnoseUnplaced(t, state)
+          const sug = generatePlacementSuggestions(t, state, assignmentMap, subjectMap)
+          return diagnosed.map((ut) => ({ ...ut, suggestions: sug.length > 0 ? sug : undefined }))
+        }),
       }
     }
 
