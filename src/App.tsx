@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react'
 import type { Teacher, Subject, SubjectCategory, Assignment, CreateInput } from './types'
 
 import { useAuth } from './hooks/useAuth'
@@ -143,9 +143,10 @@ function TeacherSection() {
     <div className="space-y-4">
       {error && <ErrorAlert message={error.message} onDismiss={clearError} />}
 
-      {showCsvImport ? (
+      {showCsvImport && (
         <TeacherCsvImport onImport={handleCsvImport} onClose={closeForm} />
-      ) : showForm ? (
+      )}
+      {showForm && !showCsvImport && (
         <div className="card p-6 sm:p-8">
           <TeacherForm
             initialValues={editTarget ?? undefined}
@@ -154,78 +155,77 @@ function TeacherSection() {
             onCancel={closeForm}
           />
         </div>
-      ) : (
-        <>
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none">
-                  <path fillRule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clipRule="evenodd" />
-                </svg>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="教員名で検索..."
-                  className="input py-2 pl-8 pr-8 text-sm w-48"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
-                      <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-              <select
-                value={filterDepartment}
-                onChange={(e) => setFilterDepartment(e.target.value as SubjectCategory | '')}
-                className="input py-2 text-sm min-w-[160px]"
-              >
-                <option value="">すべての教科</option>
-                {SUBJECT_CATEGORIES.map((cat) => (
-                  <option key={cat} value={cat}>{cat}</option>
-                ))}
-              </select>
-              {(filterDepartment || searchQuery) && (
-                <span className="text-xs text-gray-500">
-                  {filteredTeachers.length}件
-                </span>
+      )}
+      <div className={showForm || showCsvImport ? 'hidden' : undefined}>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none">
+                <path fillRule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clipRule="evenodd" />
+              </svg>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="教員名で検索..."
+                className="input py-2 pl-8 pr-8 text-sm w-48"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                    <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+                  </svg>
+                </button>
               )}
             </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => { setShowCsvImport(true); setShowForm(false) }}
-                className="btn-secondary"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
-                  <path d="M7.25 10.25a.75.75 0 0 0 1.5 0V4.56l1.97 1.97a.75.75 0 1 0 1.06-1.06l-3.25-3.25a.75.75 0 0 0-1.06 0L4.22 5.47a.75.75 0 0 0 1.06 1.06l1.97-1.97v5.69Z" />
-                  <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
-                </svg>
-                CSV一括登録
-              </button>
-              <button type="button" onClick={openCreate} className="btn-primary">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
-                  <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
-                </svg>
-                教員を追加
-              </button>
-            </div>
+            <select
+              value={filterDepartment}
+              onChange={(e) => setFilterDepartment(e.target.value as SubjectCategory | '')}
+              className="input py-2 text-sm min-w-[160px]"
+            >
+              <option value="">すべての教科</option>
+              {SUBJECT_CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+            {(filterDepartment || searchQuery) && (
+              <span className="text-xs text-gray-500">
+                {filteredTeachers.length}件
+              </span>
+            )}
           </div>
-          <TeacherList
-            teachers={filteredTeachers}
-            subjects={subjects}
-            assignments={assignments}
-            onEdit={openEdit}
-            onDelete={handleDelete}
-          />
-        </>
-      )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => { setShowCsvImport(true); setShowForm(false) }}
+              className="btn-secondary"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                <path d="M7.25 10.25a.75.75 0 0 0 1.5 0V4.56l1.97 1.97a.75.75 0 1 0 1.06-1.06l-3.25-3.25a.75.75 0 0 0-1.06 0L4.22 5.47a.75.75 0 0 0 1.06 1.06l1.97-1.97v5.69Z" />
+                <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
+              </svg>
+              CSV一括登録
+            </button>
+            <button type="button" onClick={openCreate} className="btn-primary">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
+              </svg>
+              教員を追加
+            </button>
+          </div>
+        </div>
+        <TeacherList
+          teachers={filteredTeachers}
+          subjects={subjects}
+          assignments={assignments}
+          onEdit={openEdit}
+          onDelete={handleDelete}
+        />
+      </div>
     </div>
   )
 }
@@ -242,6 +242,15 @@ function SubjectSection() {
   const [editTarget, setEditTarget] = useState<Subject | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [showCsvImport, setShowCsvImport] = useState(false)
+
+  // 全科目から既存タグを収集（重複排除・ソート済み）
+  const existingTags = useMemo(() => {
+    const tagSet = new Set<string>()
+    for (const s of subjects) {
+      if (s.tags) s.tags.forEach((t) => tagSet.add(t))
+    }
+    return [...tagSet].sort((a, b) => a.localeCompare(b, 'ja'))
+  }, [subjects])
 
   const openCreate = () => {
     setEditTarget(null)
@@ -293,45 +302,46 @@ function SubjectSection() {
     <div className="space-y-4">
       {error && <ErrorAlert message={error.message} onDismiss={clearError} />}
 
-      {showCsvImport ? (
+      {showCsvImport && (
         <SubjectCsvImport onImport={handleCsvImport} onClose={closeForm} />
-      ) : showForm ? (
+      )}
+      {showForm && !showCsvImport && (
         <div className="card p-6 sm:p-8">
           <SubjectForm
             initialValues={editTarget ?? undefined}
+            existingTags={existingTags}
             onSubmit={handleSubmit}
             onCancel={closeForm}
           />
         </div>
-      ) : (
-        <>
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => { setShowCsvImport(true); setShowForm(false) }}
-              className="btn-secondary"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
-                <path d="M7.25 10.25a.75.75 0 0 0 1.5 0V4.56l1.97 1.97a.75.75 0 1 0 1.06-1.06l-3.25-3.25a.75.75 0 0 0-1.06 0L4.22 5.47a.75.75 0 0 0 1.06 1.06l1.97-1.97v5.69Z" />
-                <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
-              </svg>
-              CSV一括登録
-            </button>
-            <button type="button" onClick={openCreate} className="btn-primary">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
-                <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
-              </svg>
-              科目を追加
-            </button>
-          </div>
-          <SubjectList
-            subjects={subjects}
-            assignments={assignments}
-            onEdit={openEdit}
-            onDelete={handleDelete}
-          />
-        </>
       )}
+      <div className={showForm || showCsvImport ? 'hidden' : undefined}>
+        <div className="flex justify-end gap-2 mb-4">
+          <button
+            type="button"
+            onClick={() => { setShowCsvImport(true); setShowForm(false) }}
+            className="btn-secondary"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+              <path d="M7.25 10.25a.75.75 0 0 0 1.5 0V4.56l1.97 1.97a.75.75 0 1 0 1.06-1.06l-3.25-3.25a.75.75 0 0 0-1.06 0L4.22 5.47a.75.75 0 0 0 1.06 1.06l1.97-1.97v5.69Z" />
+              <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
+            </svg>
+            CSV一括登録
+          </button>
+          <button type="button" onClick={openCreate} className="btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+              <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
+            </svg>
+            科目を追加
+          </button>
+        </div>
+        <SubjectList
+          subjects={subjects}
+          assignments={assignments}
+          onEdit={openEdit}
+          onDelete={handleDelete}
+        />
+      </div>
     </div>
   )
 }
@@ -402,7 +412,7 @@ function AssignmentSection() {
     <div className="space-y-4">
       {error && <ErrorAlert message={error.message} onDismiss={clearError} />}
 
-      {showBulkForm ? (
+      {showBulkForm && (
         <div className="card p-6 sm:p-8">
           <AssignmentBulkForm
             teachers={teachers}
@@ -412,7 +422,8 @@ function AssignmentSection() {
             onCancel={closeForm}
           />
         </div>
-      ) : showForm ? (
+      )}
+      {showForm && !showBulkForm && (
         <div className="card p-6 sm:p-8">
           <AssignmentForm
             initialValues={editTarget ?? undefined}
@@ -423,32 +434,31 @@ function AssignmentSection() {
             onCancel={closeForm}
           />
         </div>
-      ) : (
-        <>
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={openBulk} className="btn-secondary">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
-                <path d="M7.25 10.25a.75.75 0 0 0 1.5 0V4.56l1.97 1.97a.75.75 0 1 0 1.06-1.06l-3.25-3.25a.75.75 0 0 0-1.06 0L4.22 5.47a.75.75 0 0 0 1.06 1.06l1.97-1.97v5.69Z" />
-                <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
-              </svg>
-              一括登録
-            </button>
-            <button type="button" onClick={openCreate} className="btn-primary">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
-                <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
-              </svg>
-              授業割当を追加
-            </button>
-          </div>
-          <AssignmentList
-            assignments={assignments}
-            teachers={teachers}
-            subjects={subjects}
-            onEdit={openEdit}
-            onDelete={deleteAssignment}
-          />
-        </>
       )}
+      <div className={showForm || showBulkForm ? 'hidden' : undefined}>
+        <div className="flex justify-end gap-2 mb-4">
+          <button type="button" onClick={openBulk} className="btn-secondary">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+              <path d="M7.25 10.25a.75.75 0 0 0 1.5 0V4.56l1.97 1.97a.75.75 0 1 0 1.06-1.06l-3.25-3.25a.75.75 0 0 0-1.06 0L4.22 5.47a.75.75 0 0 0 1.06 1.06l1.97-1.97v5.69Z" />
+              <path d="M3.5 9.75a.75.75 0 0 0-1.5 0v1.5A2.75 2.75 0 0 0 4.75 14h6.5A2.75 2.75 0 0 0 14 11.25v-1.5a.75.75 0 0 0-1.5 0v1.5c0 .69-.56 1.25-1.25 1.25h-6.5c-.69 0-1.25-.56-1.25-1.25v-1.5Z" />
+            </svg>
+            一括登録
+          </button>
+          <button type="button" onClick={openCreate} className="btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+              <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
+            </svg>
+            授業割当を追加
+          </button>
+        </div>
+        <AssignmentList
+          assignments={assignments}
+          teachers={teachers}
+          subjects={subjects}
+          onEdit={openEdit}
+          onDelete={deleteAssignment}
+        />
+      </div>
     </div>
   )
 }

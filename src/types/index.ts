@@ -124,6 +124,8 @@ export interface Subject {
    * 例: 体育を月・水に分散、家庭基礎4単位を2コマ×別日に配置
    */
   spreadDays?: boolean
+  /** タグ（学科・コース等の自由分類。絞り込みに使用） */
+  tags?: string[]
   createdAt: Date
   updatedAt: Date
 }
