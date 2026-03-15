@@ -84,10 +84,13 @@ function TeacherSection() {
   const [showForm, setShowForm] = useState(false)
   const [showCsvImport, setShowCsvImport] = useState(false)
   const [filterDepartment, setFilterDepartment] = useState<SubjectCategory | ''>('')
+  const [searchQuery, setSearchQuery] = useState('')
 
-  const filteredTeachers = filterDepartment
-    ? teachers.filter((t) => t.department === filterDepartment)
-    : teachers
+  const filteredTeachers = teachers.filter((t) => {
+    if (filterDepartment && t.department !== filterDepartment) return false
+    if (searchQuery && !t.name.includes(searchQuery)) return false
+    return true
+  })
 
   const openCreate = () => {
     setEditTarget(null)
@@ -155,6 +158,29 @@ function TeacherSection() {
         <>
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
+              <div className="relative">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none">
+                  <path fillRule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clipRule="evenodd" />
+                </svg>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="教員名で検索..."
+                  className="input py-2 pl-8 pr-8 text-sm w-48"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                      <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+                    </svg>
+                  </button>
+                )}
+              </div>
               <select
                 value={filterDepartment}
                 onChange={(e) => setFilterDepartment(e.target.value as SubjectCategory | '')}
@@ -165,7 +191,7 @@ function TeacherSection() {
                   <option key={cat} value={cat}>{cat}</option>
                 ))}
               </select>
-              {filterDepartment && (
+              {(filterDepartment || searchQuery) && (
                 <span className="text-xs text-gray-500">
                   {filteredTeachers.length}件
                 </span>
