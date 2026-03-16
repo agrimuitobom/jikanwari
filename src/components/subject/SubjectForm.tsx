@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import type { Subject, CreateInput, Period, Grade, SubjectCategory } from '../../types'
 import { ErrorAlert } from '../common/ErrorAlert'
-import { PERIODS, GRADES, GRADE_LABELS, SUBJECT_CATEGORIES, SUBJECT_COLORS } from '../../utils/constants'
+import { PERIODS, GRADES, GRADE_LABELS, SUBJECT_CATEGORIES, SUBJECT_COLORS, CATEGORY_DEFAULT_COLOR } from '../../utils/constants'
 
 interface FormState {
   name: string
@@ -9,7 +9,7 @@ interface FormState {
   category: SubjectCategory
   credits: number
   weeklyFrequency: number
-  isConsecutive: boolean
+  consecutivePairs: number
   noConsecutive: boolean
   usePreferred: boolean
   preferredFrom: Period
@@ -179,7 +179,7 @@ export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCanc
     category: initialValues?.category ?? '国語',
     credits: initialValues?.credits ?? 2,
     weeklyFrequency: initialValues?.weeklyFrequency ?? 2,
-    isConsecutive: initialValues?.isConsecutive ?? false,
+    consecutivePairs: initialValues?.consecutivePairs ?? 0,
     noConsecutive: initialValues?.noConsecutive ?? false,
     usePreferred: !!initialValues?.preferredPeriods,
     preferredFrom: initialValues?.preferredPeriods?.from ?? 1,
@@ -188,7 +188,7 @@ export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCanc
     spreadDays: initialValues?.spreadDays ?? false,
     tags: initialValues?.tags ?? [],
     tagInput: '',
-    color: initialValues?.color ?? SUBJECT_COLORS[0].value,
+    color: initialValues?.color ?? CATEGORY_DEFAULT_COLOR[initialValues?.category ?? '国語'],
   })
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -210,8 +210,8 @@ export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCanc
       setFormError('科目名を入力してください')
       return
     }
-    if (form.isConsecutive && form.weeklyFrequency % 2 !== 0) {
-      setFormError('連続授業の場合、週あたりコマ数は偶数にしてください')
+    if (form.consecutivePairs > 0 && form.consecutivePairs * 2 > form.weeklyFrequency) {
+      setFormError('連続ペア数×2が週あたりコマ数を超えています')
       return
     }
     if (form.usePreferred && form.preferredFrom > form.preferredTo) {
@@ -227,7 +227,7 @@ export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCanc
         category: form.category,
         credits: form.credits,
         weeklyFrequency: form.weeklyFrequency,
-        isConsecutive: form.isConsecutive,
+        consecutivePairs: form.consecutivePairs,
         noConsecutive: form.noConsecutive,
         ...(form.usePreferred
           ? { preferredPeriods: { from: form.preferredFrom, to: form.preferredTo } }
@@ -301,7 +301,10 @@ export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCanc
             <select
               id="subject-category"
               value={form.category}
-              onChange={(e) => setForm((p) => ({ ...p, category: e.target.value as SubjectCategory }))}
+              onChange={(e) => {
+                const cat = e.target.value as SubjectCategory
+                setForm((p) => ({ ...p, category: cat, color: CATEGORY_DEFAULT_COLOR[cat] }))
+              }}
               className="form-select"
             >
               {SUBJECT_CATEGORIES.map((c) => (
@@ -341,8 +344,8 @@ export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCanc
               onChange={(e) => setForm((p) => ({ ...p, weeklyFrequency: Number(e.target.value) }))}
               className="form-input"
             />
-            {form.isConsecutive && form.weeklyFrequency % 2 !== 0 && (
-              <p className="mt-1 text-xs text-red-500">連続授業の場合は偶数にしてください</p>
+            {form.consecutivePairs > 0 && form.consecutivePairs * 2 > form.weeklyFrequency && (
+              <p className="mt-1 text-xs text-red-500">連続ペア数×2がコマ数を超えています</p>
             )}
           </div>
         </div>
@@ -352,20 +355,48 @@ export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCanc
       <section className="space-y-4">
         <h3 className="section-heading">授業形式</h3>
 
-        <Toggle
-          checked={form.isConsecutive}
-          onChange={() => setForm((p) => ({ ...p, isConsecutive: !p.isConsecutive, ...(!p.isConsecutive ? { noConsecutive: false } : {}) }))}
-          label="連続授業（2コマ連続で配置）"
-        />
-        {form.isConsecutive && (
-          <p className="ml-14 -mt-2 text-xs text-gray-400">
-            実験・実習などで2コマ続けて配置する必要がある科目に設定してください
-          </p>
-        )}
+        {/* 連続授業ペア数 */}
+        <div>
+          <label htmlFor="consecutive-pairs" className="form-label">
+            連続授業ペア数
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              id="consecutive-pairs"
+              type="number"
+              min={0}
+              max={Math.floor(form.weeklyFrequency / 2)}
+              value={form.consecutivePairs}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                setForm((p) => ({
+                  ...p,
+                  consecutivePairs: v,
+                  ...(v > 0 ? { noConsecutive: false } : {}),
+                }))
+              }}
+              className="form-input w-20"
+            />
+            <span className="text-sm text-gray-500">
+              ペア（{form.consecutivePairs * 2}コマ連続 + {form.weeklyFrequency - form.consecutivePairs * 2}コマ単独）
+            </span>
+          </div>
+          {form.consecutivePairs > 0 && (
+            <p className="mt-1 text-xs text-gray-400">
+              実験・実習などで2コマ続けて配置する必要がある場合に設定。
+              例: 週3コマ・1ペア → 連続2コマ×1回 + 単独1コマ
+            </p>
+          )}
+          {form.consecutivePairs > 0 && form.consecutivePairs * 2 > form.weeklyFrequency && (
+            <p className="mt-1 text-xs text-red-500">
+              連続ペア数×2が週あたりコマ数を超えています
+            </p>
+          )}
+        </div>
 
         <Toggle
           checked={form.noConsecutive}
-          onChange={() => setForm((p) => ({ ...p, noConsecutive: !p.noConsecutive, ...(p.noConsecutive ? {} : { isConsecutive: false }) }))}
+          onChange={() => setForm((p) => ({ ...p, noConsecutive: !p.noConsecutive, ...(p.noConsecutive ? {} : { consecutivePairs: 0 }) }))}
           label="連続配置禁止（同日に連続コマに配置しない）"
         />
         {form.noConsecutive && (

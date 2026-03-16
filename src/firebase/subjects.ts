@@ -23,7 +23,7 @@ import { COLLECTION, type Subject, type CreateInput, type UpdateInput } from '..
  * - 科目名は空文字不可
  * - 単位数・週あたりコマ数は 1 以上
  * - preferredPeriods を指定する場合、from ≤ to であること
- * - isConsecutive = true の場合、weeklyFrequency は偶数（2コマ連続 × N回）
+ * - consecutivePairs * 2 <= weeklyFrequency であること
  */
 export function validateSubject(input: CreateInput<Subject> | UpdateInput<Subject>): void {
   if ('name' in input && input.name !== undefined) {
@@ -54,11 +54,14 @@ export function validateSubject(input: CreateInput<Subject> | UpdateInput<Subjec
     }
   }
 
-  // isConsecutive と weeklyFrequency の組み合わせチェック
-  const isConsecutive = 'isConsecutive' in input ? input.isConsecutive : undefined
+  // consecutivePairs と weeklyFrequency の組み合わせチェック
+  const pairs = 'consecutivePairs' in input ? input.consecutivePairs : undefined
   const weeklyFrequency = 'weeklyFrequency' in input ? input.weeklyFrequency : undefined
-  if (isConsecutive === true && weeklyFrequency !== undefined && weeklyFrequency % 2 !== 0) {
-    throw new Error('連続授業（2コマ連続）の場合、週あたりコマ数は偶数にしてください')
+  if (pairs !== undefined && pairs < 0) {
+    throw new Error('連続ペア数は0以上を設定してください')
+  }
+  if (pairs !== undefined && pairs > 0 && weeklyFrequency !== undefined && pairs * 2 > weeklyFrequency) {
+    throw new Error('連続ペア数×2が週あたりコマ数を超えています')
   }
 }
 
@@ -81,7 +84,10 @@ function docToSubject(snap: QueryDocumentSnapshot): Subject {
     category: (d.category as string ?? '国語') as Subject['category'],
     credits: d.credits as number,
     weeklyFrequency: d.weeklyFrequency as number,
-    isConsecutive: d.isConsecutive as boolean,
+    // 後方互換: 旧 isConsecutive: true → consecutivePairs = weeklyFrequency / 2
+    consecutivePairs: typeof d.consecutivePairs === 'number'
+      ? d.consecutivePairs
+      : (d.isConsecutive === true ? Math.floor((d.weeklyFrequency as number) / 2) : 0),
     noConsecutive: (d.noConsecutive as boolean) ?? false,
     // preferredPeriods は { from: number, to: number } のオブジェクト or undefined
     ...(d.preferredPeriods !== undefined && d.preferredPeriods !== null
@@ -121,7 +127,7 @@ export async function addSubject(input: CreateInput<Subject>): Promise<Subject> 
     category: input.category,
     credits: input.credits,
     weeklyFrequency: input.weeklyFrequency,
-    isConsecutive: input.isConsecutive,
+    consecutivePairs: input.consecutivePairs,
     noConsecutive: input.noConsecutive,
     // preferredPeriods が undefined の場合はフィールド自体を省略
     ...(input.preferredPeriods !== undefined ? { preferredPeriods: input.preferredPeriods } : {}),

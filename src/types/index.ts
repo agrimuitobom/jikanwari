@@ -103,8 +103,14 @@ export interface Subject {
   credits: number
   /** 週あたりの授業コマ数（通常 credits と同値だが異なる場合もある） */
   weeklyFrequency: number
-  /** 連続授業フラグ（2コマ連続で配置する必要があるか） */
-  isConsecutive: boolean
+  /**
+   * 連続授業ペア数。
+   * 2コマ連続で配置するペアの数。0なら連続なし。
+   * 例: weeklyFrequency=3, consecutivePairs=1 → 連続2コマ×1 + 単独1コマ
+   * 例: weeklyFrequency=4, consecutivePairs=2 → 連続2コマ×2
+   * 制約: consecutivePairs * 2 <= weeklyFrequency
+   */
+  consecutivePairs: number
   /** 連続配置禁止フラグ（同日に連続して配置しない） */
   noConsecutive: boolean
   /**
