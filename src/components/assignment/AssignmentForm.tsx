@@ -322,9 +322,9 @@ export function AssignmentForm({
             <span className="badge border border-gray-200 bg-white text-gray-600">
               {selectedSubject.credits}単位
             </span>
-            {selectedSubject.isConsecutive && (
+            {selectedSubject.consecutivePairs > 0 && (
               <span className="badge border border-amber-200 bg-amber-50 text-amber-700">
-                連続授業
+                連続{selectedSubject.consecutivePairs}ペア
               </span>
             )}
             {selectedSubject.noConsecutive && (

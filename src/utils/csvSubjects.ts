@@ -5,11 +5,12 @@ import { SUBJECT_CATEGORIES } from './constants'
 // CSV テンプレートダウンロード
 // ============================================================
 
-const CSV_HEADER = '科目名,履修学年,教科,単位数,週あたりコマ数,連続授業,推奨時限開始,推奨時限終了,カラー'
+const CSV_HEADER = '科目名,履修学年,教科,単位数,週あたりコマ数,連続ペア数,推奨時限開始,推奨時限終了,カラー'
 const CSV_EXAMPLE_ROWS = [
-  '数学Ⅱ,2,数学,3,3,FALSE,,,#3b82f6',
+  '数学Ⅱ,2,数学,3,3,0,,,#3b82f6',
   '化学基礎,1,理科,2,,,,,' ,
-  '農業実習,2,農業,4,4,TRUE,3,6,#f59e0b',
+  '農業実習,2,農業,4,4,2,3,6,#f59e0b',
+  '生物実験,2,理科,3,3,1,,,#10b981',
 ]
 
 export function downloadCsvTemplate() {
@@ -130,11 +131,21 @@ export function parseCsv(text: string): ParseResult {
       }
     }
 
-    // 連続授業（任意、デフォルト＝FALSE）
-    const consecutiveStr = (cols[5] ?? '').toUpperCase()
-    const isConsecutive = consecutiveStr === 'TRUE' || consecutiveStr === '1' || consecutiveStr === 'はい'
-    if (isConsecutive && weeklyFrequency % 2 !== 0) {
-      errors.push(`${rowNum}行目: 連続授業の場合、週あたりコマ数は偶数にしてください`)
+    // 連続ペア数（任意、デフォルト＝0。後方互換: TRUE/はい→全ペア化）
+    const pairsStr = (cols[5] ?? '').trim().toUpperCase()
+    let consecutivePairs = 0
+    if (pairsStr === 'TRUE' || pairsStr === 'はい') {
+      // 旧形式の後方互換
+      consecutivePairs = Math.floor(weeklyFrequency / 2)
+    } else if (pairsStr && pairsStr !== 'FALSE' && pairsStr !== 'いいえ') {
+      consecutivePairs = Number(pairsStr)
+      if (!Number.isInteger(consecutivePairs) || consecutivePairs < 0) {
+        errors.push(`${rowNum}行目: 連続ペア数は0以上の整数を指定してください（値: "${cols[5]}"）`)
+        continue
+      }
+    }
+    if (consecutivePairs * 2 > weeklyFrequency) {
+      errors.push(`${rowNum}行目: 連続ペア数×2(${consecutivePairs * 2})が週あたりコマ数(${weeklyFrequency})を超えています`)
       continue
     }
 
@@ -161,7 +172,7 @@ export function parseCsv(text: string): ParseResult {
       category: category as SubjectCategory,
       credits,
       weeklyFrequency,
-      isConsecutive,
+      consecutivePairs,
       noConsecutive: false,
       ...(preferredPeriods ? { preferredPeriods: preferredPeriods as Subject['preferredPeriods'] } : {}),
       color,

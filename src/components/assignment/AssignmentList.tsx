@@ -286,9 +286,9 @@ export function AssignmentList({
                         />
                       )}
                       <span className="text-gray-800">{subject?.name ?? assignment.subjectId}</span>
-                      {subject?.isConsecutive && (
+                      {subject && subject.consecutivePairs > 0 && (
                         <span className="badge border border-amber-200 bg-amber-50 text-amber-600">
-                          連続
+                          連続{subject.consecutivePairs}P
                         </span>
                       )}
                       {assignment.simultaneousGroupId && (

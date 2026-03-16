@@ -131,7 +131,7 @@ export function SubjectCsvImport({ onImport, onClose }: SubjectCsvImportProps) {
                     <td className="px-3 py-2 text-gray-600">{s.category}</td>
                     <td className="px-3 py-2 text-gray-600">{s.credits}</td>
                     <td className="px-3 py-2 text-gray-600">{s.weeklyFrequency}</td>
-                    <td className="px-3 py-2 text-gray-600">{s.isConsecutive ? 'はい' : '-'}</td>
+                    <td className="px-3 py-2 text-gray-600">{s.consecutivePairs > 0 ? `${s.consecutivePairs}ペア` : '-'}</td>
                   </tr>
                 ))}
               </tbody>

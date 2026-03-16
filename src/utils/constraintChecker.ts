@@ -77,11 +77,11 @@ export function detectConstraintConflicts(
       subject,
     )
 
-    // 連続授業の場合はペア単位でカウント
-    const slotsPerTask = subject.isConsecutive ? 2 : 1
-    const tasksNeeded = Math.ceil(assignment.weeklyCount / slotsPerTask)
+    // 連続ペア + 単独のそれぞれでチェック
+    const pairs = subject.consecutivePairs
+    const singleSlots = assignment.weeklyCount - pairs * 2
 
-    if (subject.isConsecutive) {
+    if (pairs > 0) {
       // 連続授業: 使えるペア数をカウント
       const availablePairs = countConsecutivePairs(commonDays, assignTeachers, subject)
       if (availablePairs === 0) {
@@ -90,14 +90,17 @@ export function detectConstraintConflicts(
           assignmentId: assignment.id,
           message: `連続2コマの空きペアがありません（${formatDays(commonDays)}の勤務日で利用可能なペアなし）`,
         })
-      } else if (availablePairs < tasksNeeded) {
+      } else if (availablePairs < pairs) {
         warnings.push({
           severity: 'warning',
           assignmentId: assignment.id,
-          message: `連続2コマのペアが${availablePairs}個しかなく、必要数${tasksNeeded}に不足する可能性があります`,
+          message: `連続2コマのペアが${availablePairs}個しかなく、必要数${pairs}に不足する可能性があります`,
         })
       }
-    } else {
+    }
+
+    if (singleSlots > 0 || pairs === 0) {
+      const totalNeeded = pairs === 0 ? assignment.weeklyCount : singleSlots
       if (availableSlots === 0) {
         const names = assignTeachers.map((t) => t.name).join('・')
         warnings.push({
@@ -105,11 +108,11 @@ export function detectConstraintConflicts(
           assignmentId: assignment.id,
           message: `${names}の勤務可能日・除外コマと科目の除外時限により、配置可能なコマが0です`,
         })
-      } else if (availableSlots < tasksNeeded) {
+      } else if (availableSlots < totalNeeded) {
         warnings.push({
           severity: 'warning',
           assignmentId: assignment.id,
-          message: `配置可能コマ数(${availableSlots})が必要数(${tasksNeeded})に不足する可能性があります（他の割当との競合次第）`,
+          message: `配置可能コマ数(${availableSlots})が必要数(${totalNeeded})に不足する可能性があります（他の割当との競合次第）`,
         })
       }
     }
@@ -178,20 +181,18 @@ export function detectConstraintConflicts(
     }
 
     // 連続授業の混在チェック
-    const hasConsecutive = groupAssignments.some((a) => {
+    const consecutivePairValues = groupAssignments.map((a) => {
       const s = subjectMap.get(a.subjectId)
-      return s?.isConsecutive
+      return s?.consecutivePairs ?? 0
     })
-    const hasNonConsecutive = groupAssignments.some((a) => {
-      const s = subjectMap.get(a.subjectId)
-      return s && !s.isConsecutive
-    })
-    if (hasConsecutive && hasNonConsecutive) {
+    const maxPairs = Math.max(...consecutivePairValues)
+    const minPairs = Math.min(...consecutivePairValues)
+    if (maxPairs > 0 && minPairs === 0) {
       for (const a of groupAssignments) {
         warnings.push({
           severity: 'warning',
           assignmentId: a.id,
-          message: '同時開講グループ内に連続授業と通常授業が混在しています（連続授業として扱われます）',
+          message: '同時開講グループ内に連続授業と通常授業が混在しています（最大の連続ペア数が適用されます）',
         })
       }
     }

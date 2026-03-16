@@ -32,7 +32,7 @@ function makeSubject(overrides: Partial<Subject> = {}): Subject {
     category: '数学',
     credits: 3,
     weeklyFrequency: 3,
-    isConsecutive: false,
+    consecutivePairs: 0,
     noConsecutive: false,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -126,7 +126,7 @@ describe('scheduler', () => {
       const teacher = makeTeacher()
       const subject = makeSubject({
         weeklyFrequency: 2,
-        isConsecutive: true,
+        consecutivePairs: 1,
       })
       const assignment = makeAssignment({
         subjectId: subject.id,
@@ -149,7 +149,7 @@ describe('scheduler', () => {
       const teacher = makeTeacher()
       const subject = makeSubject({
         weeklyFrequency: 2,
-        isConsecutive: true,
+        consecutivePairs: 1,
       })
       const assignment = makeAssignment({
         subjectId: subject.id,

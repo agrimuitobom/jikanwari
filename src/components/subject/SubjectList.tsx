@@ -191,9 +191,9 @@ export function SubjectList({ subjects, assignments, onEdit, onDelete }: Subject
                   <span className="badge border border-gray-200 bg-gray-50 text-gray-600">
                     週{subject.weeklyFrequency}コマ
                   </span>
-                  {subject.isConsecutive && (
+                  {subject.consecutivePairs > 0 && (
                     <span className="badge border border-amber-200 bg-amber-50 text-amber-700">
-                      連続授業
+                      連続{subject.consecutivePairs}ペア
                     </span>
                   )}
                   {subject.preferredPeriods && (
