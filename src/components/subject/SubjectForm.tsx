@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import type { Subject, CreateInput, Period, Grade, SubjectCategory } from '../../types'
 import { ErrorAlert } from '../common/ErrorAlert'
-import { PERIODS, GRADES, GRADE_LABELS, SUBJECT_CATEGORIES, SUBJECT_COLORS } from '../../utils/constants'
+import { PERIODS, GRADES, GRADE_LABELS, SUBJECT_CATEGORIES, SUBJECT_COLORS, CATEGORY_DEFAULT_COLOR } from '../../utils/constants'
 
 interface FormState {
   name: string
@@ -188,7 +188,7 @@ export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCanc
     spreadDays: initialValues?.spreadDays ?? false,
     tags: initialValues?.tags ?? [],
     tagInput: '',
-    color: initialValues?.color ?? SUBJECT_COLORS[0].value,
+    color: initialValues?.color ?? CATEGORY_DEFAULT_COLOR[initialValues?.category ?? '国語'],
   })
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -301,7 +301,10 @@ export function SubjectForm({ initialValues, existingTags = [], onSubmit, onCanc
             <select
               id="subject-category"
               value={form.category}
-              onChange={(e) => setForm((p) => ({ ...p, category: e.target.value as SubjectCategory }))}
+              onChange={(e) => {
+                const cat = e.target.value as SubjectCategory
+                setForm((p) => ({ ...p, category: cat, color: CATEGORY_DEFAULT_COLOR[cat] }))
+              }}
               className="form-select"
             >
               {SUBJECT_CATEGORIES.map((c) => (

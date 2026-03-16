@@ -53,8 +53,24 @@ export const SUBJECT_COLORS: { value: string; label: string }[] = [
   { value: '#06b6d4', label: '水色' },
   { value: '#84cc16', label: '黄緑' },
   { value: '#f97316', label: 'オレンジ' },
+  { value: '#6c3d37', label: '茶' },
   { value: '#64748b', label: 'グレー' },
 ]
+
+/** 教科別デフォルトカラー */
+export const CATEGORY_DEFAULT_COLOR: Record<SubjectCategory, string> = {
+  '国語': '#ef4444',
+  '数学': '#3b82f6',
+  '理科': '#10b981',
+  '地歴公民': '#f59e0b',
+  '英語': '#8b5cf6',
+  '芸術': '#ec4899',
+  '家庭科': '#f97316',
+  '保健体育': '#84cc16',
+  '農業': '#06b6d4',
+  '商業': '#64748b',
+  'その他': '#6c3d37',
+}
 
 // ============================================================
 // 固定クラス一覧（高校1〜3年 × 各3組 = 9クラス）
