@@ -1,5 +1,10 @@
 import type { Teacher, Subject, Assignment, DayOfWeek, Period } from '../types'
-import { DAYS, PERIODS, DAY_LABELS } from './constants'
+import { DAYS, PERIODS, DAY_LABELS, getClassLabel } from './constants'
+
+/** constraintChecker用のクラスラベル取得（getClassLabelを利用） */
+function getClassLabelForChecker(classId: string): string {
+  return getClassLabel(classId)
+}
 
 // ============================================================
 // 制約矛盾の事前検出
@@ -199,9 +204,11 @@ export function detectConstraintConflicts(
   }
 
   // 固定スロットの競合チェック（異なる割当が同じ固定スロットでクラスまたは教員が重複）
+  // 連続授業ペアの場合、開始時限だけでなく次の時限もチェック対象
   const fixedSlotMap = new Map<string, Assignment[]>()
   for (const assignment of assignments) {
     if (!assignment.fixedSlots || assignment.fixedSlots.length === 0) continue
+    const subject = subjectMap.get(assignment.subjectId)
     for (const slot of assignment.fixedSlots) {
       const key = `${slot.day}:${slot.period}`
       const list = fixedSlotMap.get(key)
@@ -209,6 +216,50 @@ export function detectConstraintConflicts(
         list.push(assignment)
       } else {
         fixedSlotMap.set(key, [assignment])
+      }
+      // 連続授業ペアの場合、次の時限も登録（ペア占有を検出するため）
+      if (subject && subject.consecutivePairs > 0 && slot.period < 6) {
+        const nextKey = `${slot.day}:${slot.period + 1}`
+        const nextList = fixedSlotMap.get(nextKey)
+        if (nextList) {
+          nextList.push(assignment)
+        } else {
+          fixedSlotMap.set(nextKey, [assignment])
+        }
+      }
+    }
+  }
+
+  // 同時開講グループの場合、メンバークラスの固定スロット競合もチェック
+  for (const [, groupAssignments] of simultaneousGroups) {
+    const groupFixedSlots = groupAssignments[0]?.fixedSlots ?? []
+    const subject = subjectMap.get(groupAssignments[0]?.subjectId ?? '')
+    for (const slot of groupFixedSlots) {
+      const periodsToCheck = [slot.period]
+      if (subject && subject.consecutivePairs > 0 && slot.period < 6) {
+        periodsToCheck.push((slot.period + 1) as Period)
+      }
+      for (const p of periodsToCheck) {
+        const key = `${slot.day}:${p}`
+        // グループの各メンバークラスが同じスロットに他の固定割当を持っていないか
+        for (const ga of groupAssignments) {
+          const existing = fixedSlotMap.get(key)
+          if (existing) {
+            for (const ea of existing) {
+              if (ea.id === ga.id) continue
+              if (ea.simultaneousGroupId && ea.simultaneousGroupId === ga.simultaneousGroupId) continue
+              if (ea.classId === ga.classId) {
+                const dayLabel = DAY_LABELS[slot.day as DayOfWeek] ?? slot.day
+                const eaSubject = subjectMap.get(ea.subjectId)
+                warnings.push({
+                  severity: 'error',
+                  assignmentId: ga.id,
+                  message: `同時開講グループの${getClassLabelForChecker(ga.classId)}が${dayLabel}${p}限に${eaSubject?.name ?? '別の授業'}と固定スロット競合しています`,
+                })
+              }
+            }
+          }
+        }
       }
     }
   }
