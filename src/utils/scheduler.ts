@@ -365,6 +365,11 @@ function buildTasks(
         const minAvailDays = Math.min(...allTeachers.map((t) => t.availableDays.length))
         priority -= (5 - minAvailDays) * 10
 
+        // TT教員が多い場合（4人以上）は制約が非常に厳しいため追加優先
+        if (allTeachers.length >= 4) {
+          priority -= (allTeachers.length - 3) * 50
+        }
+
         tasks.push({
           assignments: groupAssignments,
           subjects: groupSubjects,
@@ -403,6 +408,11 @@ function buildTasks(
 
         const minAvailDays = Math.min(...allTeachers.map((t) => t.availableDays.length))
         priority -= (5 - minAvailDays) * 10
+
+        // TT教員が多い場合（4人以上）は制約が非常に厳しいため追加優先
+        if (allTeachers.length >= 4) {
+          priority -= (allTeachers.length - 3) * 50
+        }
 
         tasks.push({
           assignments: groupAssignments,
@@ -842,6 +852,44 @@ function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask[]
       reasons.push(`同時開講グループ（${task.assignments.length}クラス合同）`)
     }
 
+    // 固定スロットの場合、その固定先で何がブロックしているかを具体的に診断
+    if (task.fixedSlot) {
+      const { day, period } = task.fixedSlot
+      const dayLabel = DAY_LABELS[day]
+      const fixedBlockReasons: string[] = []
+      const checkPeriods: Period[] = isConsecutive
+        ? [period, (period + 1) as Period]
+        : [period]
+
+      for (const p of checkPeriods) {
+        if (!isSlotFreeForClass(state, day, p, assignment.classId)) {
+          fixedBlockReasons.push(`${dayLabel}${p}限にクラスの別授業あり`)
+        }
+        for (const teacher of teachers) {
+          if (!isTeacherAvailable(teacher, day, p)) {
+            fixedBlockReasons.push(`${teacher.name}が${dayLabel}${p}限に勤務不可`)
+          } else if (!isSlotFreeForTeacher(state, day, p, teacher.id)) {
+            fixedBlockReasons.push(`${teacher.name}の${dayLabel}${p}限に別授業あり`)
+          }
+        }
+      }
+
+      if (fixedBlockReasons.length > 0) {
+        reasons.push(`固定先（${dayLabel}${period}限）のブロック: ${fixedBlockReasons.join('、')}`)
+      } else {
+        // 同時開講グループ内の他の割当がブロックされている可能性
+        reasons.push(`固定先（${dayLabel}${period}限）で同時開講グループの他クラスが競合`)
+      }
+
+      results.push({
+        assignmentId: assignment.id,
+        classId: assignment.classId,
+        subjectId: assignment.subjectId,
+        reason: reasons.join('／'),
+      })
+      continue
+    }
+
     // 各曜日×時限ごとにブロック要因を集計
     let totalSlots = 0
     let classConflicts = 0
@@ -1037,7 +1085,10 @@ function repairPhase(
   const stillUnplaced: ScheduleTask[] = []
 
   for (const task of unplacedTasks) {
-    if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, 2, new Set())) {
+    // TT科目（教員数が多い）はより深いチェーン置換を許可
+    const teacherCount = getAllTeachersFlat(task).length
+    const depth = teacherCount >= 4 ? 3 : 2
+    if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, depth, new Set())) {
       // 修復成功
     } else {
       stillUnplaced.push(task)
@@ -1160,7 +1211,10 @@ function tryRelocateTask(
         }
       }
 
-      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > 3) continue
+      // TT科目（教員数が多い）の場合はブロッカー上限を拡大
+      const allTeachersCount = getAllTeachersFlat(task).length
+      const maxBlockers = Math.max(3, allTeachersCount + task.assignments.length)
+      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > maxBlockers) continue
 
       // スナップショットを保存してから状態を変更
       const saved = saveState(state, placementMap)
@@ -1476,7 +1530,7 @@ export function* generateSchedule(
     // フェーズ3: ローカル修復（チェーン置換）を複数ラウンド実行
     // 1回の修復成功で空きが連鎖的に増え、次のラウンドで別のタスクも配置可能になる
     let repairInput = unplaced2
-    const MAX_REPAIR_ROUNDS = 3
+    const MAX_REPAIR_ROUNDS = 5
     for (let round = 0; round < MAX_REPAIR_ROUNDS && repairInput.length > 0; round++) {
       const result = repairPhase(repairInput, state, assignmentMap, maxTeacherPerDay, placementMap)
       if (result.length === repairInput.length) break // 改善なし → 打ち切り
