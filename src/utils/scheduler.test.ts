@@ -569,4 +569,134 @@ describe('scheduler', () => {
       }
     })
   })
+
+  describe('固定スロット（fixedSlots）', () => {
+    it('連続2コマの固定スロットが複数クラスで正しく火曜5-6限に配置される', () => {
+      // 課題研究: 3クラス分、各クラス別の教員、火曜5-6限固定
+      const teacher1 = makeTeacher({ name: '教員1' })
+      const teacher2 = makeTeacher({ name: '教員2' })
+      const teacher3 = makeTeacher({ name: '教員3' })
+
+      const subject = makeSubject({
+        name: '課題研究',
+        grade: 3,
+        category: 'その他',
+        credits: 2,
+        weeklyFrequency: 2,
+        consecutivePairs: 1,
+      })
+
+      // 3クラス分の割当、全て火曜5限固定（連続なので5-6限になる）
+      const a1 = makeAssignment({
+        classId: 'grade3-class1',
+        subjectId: subject.id,
+        teacherIds: [teacher1.id],
+        weeklyCount: 2,
+        fixedSlots: [{ day: 'tuesday' as DayOfWeek, period: 5 as Period }],
+      })
+      const a2 = makeAssignment({
+        classId: 'grade3-class2',
+        subjectId: subject.id,
+        teacherIds: [teacher2.id],
+        weeklyCount: 2,
+        fixedSlots: [{ day: 'tuesday' as DayOfWeek, period: 5 as Period }],
+      })
+      const a3 = makeAssignment({
+        classId: 'grade3-class3',
+        subjectId: subject.id,
+        teacherIds: [teacher3.id],
+        weeklyCount: 2,
+        fixedSlots: [{ day: 'tuesday' as DayOfWeek, period: 5 as Period }],
+      })
+
+      // 他の科目も入れて競合状況を作る
+      const otherSubject = makeSubject({
+        name: '数学III',
+        grade: 3,
+        credits: 4,
+        weeklyFrequency: 4,
+        consecutivePairs: 0,
+      })
+      const otherAssignments = [
+        makeAssignment({ classId: 'grade3-class1', subjectId: otherSubject.id, teacherIds: [teacher1.id], weeklyCount: 4 }),
+        makeAssignment({ classId: 'grade3-class2', subjectId: otherSubject.id, teacherIds: [teacher2.id], weeklyCount: 4 }),
+        makeAssignment({ classId: 'grade3-class3', subjectId: otherSubject.id, teacherIds: [teacher3.id], weeklyCount: 4 }),
+      ]
+
+      const result = runGenerator(
+        [teacher1, teacher2, teacher3],
+        [subject, otherSubject],
+        [a1, a2, a3, ...otherAssignments],
+      )
+
+      // 課題研究の全エントリが火曜日であることを確認
+      for (const a of [a1, a2, a3]) {
+        const entries = result.entries.filter((e) => e.assignmentId === a.id)
+        expect(entries.length).toBe(2) // 連続2コマ
+        for (const entry of entries) {
+          expect(entry.day).toBe('tuesday')
+          expect([5, 6]).toContain(entry.period)
+        }
+      }
+    })
+
+    it('固定スロットのタスクが修復フェーズで別の場所に移動されない', () => {
+      // 多くの割当で競合が発生する状況を作り、固定タスクが別の場所に行かないことを確認
+      const teachers = Array.from({ length: 3 }, (_, i) => makeTeacher({ name: `教員${i + 1}` }))
+
+      const fixedSubject = makeSubject({
+        name: 'HR',
+        grade: 1,
+        credits: 1,
+        weeklyFrequency: 1,
+        consecutivePairs: 0,
+      })
+
+      // 木曜6限固定
+      const fixedAssignments = ['grade1-class1', 'grade1-class2', 'grade1-class3'].map((classId, i) =>
+        makeAssignment({
+          classId,
+          subjectId: fixedSubject.id,
+          teacherIds: [teachers[i].id],
+          weeklyCount: 1,
+          fixedSlots: [{ day: 'thursday' as DayOfWeek, period: 6 as Period }],
+        }),
+      )
+
+      // 他の科目をたくさん追加して枠を圧迫
+      const otherSubjects = Array.from({ length: 5 }, (_, i) =>
+        makeSubject({ name: `科目${i}`, grade: 1, credits: 3, weeklyFrequency: 3 }),
+      )
+      const otherAssignments: Assignment[] = []
+      for (const classId of ['grade1-class1', 'grade1-class2', 'grade1-class3']) {
+        for (const sub of otherSubjects) {
+          otherAssignments.push(
+            makeAssignment({
+              classId,
+              subjectId: sub.id,
+              teacherIds: [teachers[Math.floor(Math.random() * 3)].id],
+              weeklyCount: 3,
+            }),
+          )
+        }
+      }
+
+      const result = runGenerator(
+        teachers,
+        [fixedSubject, ...otherSubjects],
+        [...fixedAssignments, ...otherAssignments],
+      )
+
+      // 固定タスクが木曜6限にあることを確認
+      for (const a of fixedAssignments) {
+        const entries = result.entries.filter((e) => e.assignmentId === a.id)
+        if (entries.length > 0) {
+          for (const entry of entries) {
+            expect(entry.day).toBe('thursday')
+            expect(entry.period).toBe(6)
+          }
+        }
+      }
+    })
+  })
 })
