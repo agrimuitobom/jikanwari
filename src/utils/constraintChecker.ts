@@ -198,6 +198,67 @@ export function detectConstraintConflicts(
     }
   }
 
+  // 固定スロットの競合チェック（異なる割当が同じ固定スロットでクラスまたは教員が重複）
+  const fixedSlotMap = new Map<string, Assignment[]>()
+  for (const assignment of assignments) {
+    if (!assignment.fixedSlots || assignment.fixedSlots.length === 0) continue
+    for (const slot of assignment.fixedSlots) {
+      const key = `${slot.day}:${slot.period}`
+      const list = fixedSlotMap.get(key)
+      if (list) {
+        list.push(assignment)
+      } else {
+        fixedSlotMap.set(key, [assignment])
+      }
+    }
+  }
+
+  for (const [slotKey, slotAssignments] of fixedSlotMap) {
+    if (slotAssignments.length < 2) continue
+    const [dayStr, periodStr] = slotKey.split(':')
+    const dayLabel = DAY_LABELS[dayStr as DayOfWeek] ?? dayStr
+    const period = periodStr
+
+    // 同じクラスが同じ固定スロットに複数割当されていないかチェック
+    const classIds = slotAssignments.map((a) => a.classId)
+    const duplicateClasses = classIds.filter((id, idx) => classIds.indexOf(id) !== idx)
+    if (duplicateClasses.length > 0) {
+      for (const a of slotAssignments.filter((a) => duplicateClasses.includes(a.classId))) {
+        warnings.push({
+          severity: 'error',
+          assignmentId: a.id,
+          message: `${dayLabel}${period}限に同じクラスの複数授業が固定されています`,
+        })
+      }
+    }
+
+    // 同じ教員が同じ固定スロットに複数割当されていないかチェック
+    // （同時開講グループ内は除外: 同じグループの割当は同じスロットに入るのが正常）
+    for (let i = 0; i < slotAssignments.length; i++) {
+      for (let j = i + 1; j < slotAssignments.length; j++) {
+        const a1 = slotAssignments[i]
+        const a2 = slotAssignments[j]
+
+        // 同時開講グループ内なら正常
+        if (a1.simultaneousGroupId && a1.simultaneousGroupId === a2.simultaneousGroupId) continue
+
+        const sharedTeachers = a1.teacherIds.filter((id) => a2.teacherIds.includes(id))
+        if (sharedTeachers.length > 0) {
+          const names = sharedTeachers
+            .map((id) => teacherMap.get(id)?.name ?? id)
+            .join('・')
+          const s1 = subjectMap.get(a1.subjectId)
+          const s2 = subjectMap.get(a2.subjectId)
+          warnings.push({
+            severity: 'error',
+            assignmentId: a1.id,
+            message: `${dayLabel}${period}限に${names}が${s1?.name ?? '授業'}と${s2?.name ?? '授業'}の両方に固定されています`,
+          })
+        }
+      }
+    }
+  }
+
   // 同一教員の総コマ数チェック
   const teacherTotalSlots = new Map<string, number>()
   for (const assignment of assignments) {
