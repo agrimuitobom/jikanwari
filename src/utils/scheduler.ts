@@ -1086,9 +1086,12 @@ function tryRelocateTask(
   // 深度0なら直接配置のみ
   if (maxDepth <= 0) return false
 
-  // 各スロットでチェーン置換を試みる
-  const days = shuffleArray([...DAYS])
-  const periods = task.isConsecutive ? shuffleArray([...CONSECUTIVE_STARTS]) : shuffleArray([...PERIODS])
+  // 固定スロットタスクは指定スロットのみでチェーン置換を試みる
+  // （別の曜日・時限に配置されるのを防ぐ）
+  const days = task.fixedSlot ? [task.fixedSlot.day] : shuffleArray([...DAYS])
+  const periods = task.fixedSlot
+    ? [task.fixedSlot.period]
+    : task.isConsecutive ? shuffleArray([...CONSECUTIVE_STARTS]) : shuffleArray([...PERIODS])
 
   for (const day of days) {
     for (const period of periods) {
