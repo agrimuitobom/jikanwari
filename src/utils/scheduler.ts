@@ -976,6 +976,58 @@ function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask[]
  * @param randomTopK - 候補スロットの上位N件からランダムに選択（1=常にベスト、>1=ランダム性あり）
  * @returns 配置できなかったタスクの配列
  */
+/**
+ * 固定スロットの事前確保フェーズ。
+ * 固定タスクを制約の厳しい順に配置し、ブロッカーを積極的にチェーン置換で排除する。
+ * これにより、非固定タスクが固定スロットを占有する問題を防止する。
+ */
+function preReserveFixedSlots(
+  fixedTasks: ScheduleTask[],
+  state: BoardState,
+  assignmentMap: Map<string, Assignment>,
+  maxTeacherPerDay: number,
+  placementMap: Map<string, PlacementRecord>,
+): ScheduleTask[] {
+  if (fixedTasks.length === 0) return []
+
+  const unplaced: ScheduleTask[] = []
+
+  // 制約が厳しいものから配置（同時開講・TT教員数が多いものを優先）
+  const sorted = [...fixedTasks].sort((a, b) => {
+    const aComplexity = a.assignments.length * 10 + getAllTeachersFlat(a).length * 5 + (a.isConsecutive ? 5 : 0)
+    const bComplexity = b.assignments.length * 10 + getAllTeachersFlat(b).length * 5 + (b.isConsecutive ? 5 : 0)
+    return bComplexity - aComplexity
+  })
+
+  for (const task of sorted) {
+    const candidates = getCandidateSlots(task, state)
+    if (candidates.length > 0) {
+      // 直接配置可能
+      candidates.sort((a, b) =>
+        scoreCandidateSlot(task, b, state, maxTeacherPerDay) -
+        scoreCandidateSlot(task, a, state, maxTeacherPerDay)
+      )
+      const best = candidates[0]
+      const entries = placeTask(task, state, best.day, best.period)
+      const record: PlacementRecord = { task, entries, day: best.day, startPeriod: best.period }
+      for (const e of entries) {
+        placementMap.set(cellKey(e.day, e.period, e.classId), record)
+      }
+    } else {
+      // チェーン置換で固定スロットのブロッカーを排除（深度5）
+      const teacherCount = getAllTeachersFlat(task).length
+      const depth = Math.max(4, Math.min(6, teacherCount))
+      if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, depth, new Set())) {
+        // チェーン置換成功
+      } else {
+        unplaced.push(task)
+      }
+    }
+  }
+
+  return unplaced
+}
+
 function greedyPlace(
   tasks: ScheduleTask[],
   state: BoardState,
@@ -1085,9 +1137,12 @@ function repairPhase(
   const stillUnplaced: ScheduleTask[] = []
 
   for (const task of unplacedTasks) {
-    // TT科目（教員数が多い）はより深いチェーン置換を許可
+    // TT科目（教員数が多い）・同時開講・固定スロットはより深いチェーン置換を許可
     const teacherCount = getAllTeachersFlat(task).length
-    const depth = teacherCount >= 4 ? 3 : 2
+    const isComplex = task.fixedSlot || task.simultaneousGroupId || teacherCount >= 4
+    const depth = isComplex
+      ? Math.max(3, Math.min(5, teacherCount >= 4 ? teacherCount - 1 : 3))
+      : 2
     if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, depth, new Set())) {
       // 修復成功
     } else {
@@ -1183,10 +1238,21 @@ function tryRelocateTask(
           if (!isSlotFreeForClass(state, day, p, a.classId)) {
             const rec = placementMap.get(cellKey(day, p, a.classId))
             if (rec) {
-              if (rec.task.fixedSlot || excludedTasks.has(rec.task)) {
+              if (excludedTasks.has(rec.task)) {
                 blockerHardBlock = true; break
               }
-              blockerRecords.add(rec)
+              // 固定スロットのブロッカー: 自タスクも同じスロットに固定されている場合は
+              // ブロッカーの固定を解除して再配置を試みる（より制約の厳しいタスクを優先）
+              if (rec.task.fixedSlot) {
+                if (task.fixedSlot && task.fixedSlot.day === day && task.fixedSlot.period === period) {
+                  // 自タスクが同じ固定スロットを持つ → ブロッカーを非固定として再配置を試みる
+                  blockerRecords.add(rec)
+                } else {
+                  blockerHardBlock = true; break
+                }
+              } else {
+                blockerRecords.add(rec)
+              }
             }
           }
           // 教員競合
@@ -1198,10 +1264,18 @@ function tryRelocateTask(
                 if (blockAssignment) {
                   const rec = placementMap.get(cellKey(day, p, blockAssignment.classId))
                   if (rec) {
-                    if (rec.task.fixedSlot || excludedTasks.has(rec.task)) {
+                    if (excludedTasks.has(rec.task)) {
                       blockerHardBlock = true; break
                     }
-                    blockerRecords.add(rec)
+                    if (rec.task.fixedSlot) {
+                      if (task.fixedSlot && task.fixedSlot.day === day && task.fixedSlot.period === period) {
+                        blockerRecords.add(rec)
+                      } else {
+                        blockerHardBlock = true; break
+                      }
+                    } else {
+                      blockerRecords.add(rec)
+                    }
                   }
                 }
               }
@@ -1248,7 +1322,18 @@ function tryRelocateTask(
 
         let allRelocated = true
         for (const rec of blockerList) {
-          if (!tryRelocateTask(rec.task, state, assignmentMap, maxTeacherPerDay, placementMap, maxDepth - 1, newExcluded)) {
+          // 固定スロットのブロッカーが別の固定タスクに追い出された場合、
+          // 固定制約を一時的に解除して全スロットで再配置を試みる
+          const originalFixedSlot = rec.task.fixedSlot
+          if (originalFixedSlot) {
+            rec.task.fixedSlot = undefined
+          }
+          const relocated = tryRelocateTask(rec.task, state, assignmentMap, maxTeacherPerDay, placementMap, maxDepth - 1, newExcluded)
+          if (!relocated) {
+            // 復元: fixedSlotを元に戻す
+            if (originalFixedSlot) {
+              rec.task.fixedSlot = originalFixedSlot
+            }
             allRelocated = false
             break
           }
@@ -1321,6 +1406,13 @@ function generatePlacementSuggestions(
 ): string[] {
   const suggestions: string[] = []
 
+  // 固定スロットタスクの場合、まず固定先のブロッカーを優先的に提案
+  if (task.fixedSlot) {
+    const fixedSuggestions = generateFixedSlotSuggestions(task, state, assignmentMap, subjectMap)
+    suggestions.push(...fixedSuggestions)
+    if (suggestions.length >= 3) return suggestions.slice(0, 3)
+  }
+
   for (let ai = 0; ai < task.assignments.length; ai++) {
     const assignment = task.assignments[ai]
     const subject = task.subjects[ai]
@@ -1329,7 +1421,7 @@ function generatePlacementSuggestions(
     const pc = state.assignmentPlacedCount.get(assignment.id) ?? 0
     if (pc >= assignment.weeklyCount) continue
 
-    const analyses: { blockers: string[] }[] = []
+    const analyses: { blockers: string[]; isFixedSlot: boolean }[] = []
 
     for (const day of DAYS) {
       const periodsToCheck = task.isConsecutive ? CONSECUTIVE_STARTS : PERIODS
@@ -1379,14 +1471,14 @@ function generatePlacementSuggestions(
         }
 
         if (!hardBlocked && blockers.length > 0 && blockers.length <= 3) {
-          analyses.push({ blockers: [...new Set(blockers)] })
+          analyses.push({ blockers: [...new Set(blockers)], isFixedSlot: false })
         }
       }
     }
 
     analyses.sort((a, b) => a.blockers.length - b.blockers.length)
 
-    const seen = new Set<string>()
+    const seen = new Set<string>(suggestions)
     for (const analysis of analyses) {
       const text = analysis.blockers.join(' かつ ')
       if (!seen.has(text)) {
@@ -1397,7 +1489,118 @@ function generatePlacementSuggestions(
     }
   }
 
+  return suggestions.slice(0, 3)
+}
+
+/**
+ * 固定スロットタスク専用の提案生成。
+ * 固定先スロットで何がブロックしているかを具体的に分析し、
+ * そのブロッカーの移動先候補も含めて提案する。
+ */
+function generateFixedSlotSuggestions(
+  task: ScheduleTask,
+  state: BoardState,
+  assignmentMap: Map<string, Assignment>,
+  subjectMap: Map<string, Subject>,
+): string[] {
+  if (!task.fixedSlot) return []
+
+  const { day, period } = task.fixedSlot
+  const dayLabel = DAY_LABELS[day]
+  const suggestions: string[] = []
+  const checkPeriods: Period[] = task.isConsecutive
+    ? [period, (period + 1) as Period]
+    : [period]
+
+  for (let ai = 0; ai < task.assignments.length; ai++) {
+    const assignment = task.assignments[ai]
+    const teachers = task.teacherGroups[ai]
+
+    for (const p of checkPeriods) {
+      // クラス競合: 固定先にある別の授業を特定
+      if (!isSlotFreeForClass(state, day, p, assignment.classId)) {
+        const blockAid = state.classGrid.get(cellKey(day, p, assignment.classId))
+        if (blockAid) {
+          const blockA = assignmentMap.get(blockAid)
+          const blockS = blockA ? subjectMap.get(blockA.subjectId) : null
+          const subjectName = blockS?.name ?? '授業'
+
+          // ブロッカーの移動先候補を探す
+          const moveTarget = findMoveTargetForBlocker(blockAid, state, assignmentMap, subjectMap)
+          if (moveTarget) {
+            suggestions.push(
+              `${getClassLabel(assignment.classId)}の${dayLabel}${p}限（${subjectName}）を${moveTarget}に移動`
+            )
+          } else {
+            suggestions.push(
+              `${getClassLabel(assignment.classId)}の${dayLabel}${p}限（${subjectName}）を移動`
+            )
+          }
+        }
+      }
+
+      // 教員競合: 固定先で教員をブロックしている授業を特定
+      for (const teacher of teachers) {
+        if (!isSlotFreeForTeacher(state, day, p, teacher.id) && isTeacherAvailable(teacher, day, p)) {
+          const blockAid = state.teacherGrid.get(cellKey(day, p, teacher.id))
+          if (blockAid) {
+            const blockA = assignmentMap.get(blockAid)
+            const blockS = blockA ? subjectMap.get(blockA.subjectId) : null
+            const classLabel = blockA ? getClassLabel(blockA.classId) : ''
+
+            const moveTarget = findMoveTargetForBlocker(blockAid, state, assignmentMap, subjectMap)
+            if (moveTarget) {
+              suggestions.push(
+                `${teacher.name}の${dayLabel}${p}限（${classLabel} ${blockS?.name ?? ''}）を${moveTarget}に移動`
+              )
+            } else {
+              suggestions.push(
+                `${teacher.name}の${dayLabel}${p}限（${classLabel} ${blockS?.name ?? ''}）を移動`
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+
   return suggestions
+}
+
+/**
+ * ブロッカーの移動先候補を1つ探す。
+ * ブロッカーが配置可能な別のスロットがあれば「火3限」のように返す。
+ */
+function findMoveTargetForBlocker(
+  blockerAssignmentId: string,
+  state: BoardState,
+  assignmentMap: Map<string, Assignment>,
+  subjectMap: Map<string, Subject>,
+): string | null {
+  const assignment = assignmentMap.get(blockerAssignmentId)
+  if (!assignment) return null
+  const subject = subjectMap.get(assignment.subjectId)
+  if (!subject) return null
+
+  // ブロッカーの全教員を取得（簡略版: assignmentから直接）
+  // 注: ここではBoardState上の教員情報は使わず、割当の教員IDのみ使用
+  for (const day of DAYS) {
+    for (const period of PERIODS) {
+      if (subject.excludedPeriods?.includes(period)) continue
+
+      // クラスが空いているか
+      if (!isSlotFreeForClass(state, day, period, assignment.classId)) continue
+
+      // 同日同科目チェック
+      const cdsKey = classDaySubjectKey(day, assignment.classId, subject.id)
+      if ((state.classDaySubjectCount.get(cdsKey) ?? 0) > 0) continue
+
+      const dayLabel = DAY_LABELS[day]
+      return `${dayLabel}${period}限`
+    }
+  }
+
+  return null
 }
 
 // ============================================================
@@ -1521,8 +1724,15 @@ export function* generateSchedule(
     // MRV方式は2回目以降で使用（初回は優先度順で安定した解を得る）
     const useMRV = pass > 0
 
-    // フェーズ1: 貪欲配置
-    const unplaced1 = greedyPlace(tasks, state, maxTeacherPerDay, useMRV, placementMap, randomTopK)
+    // フェーズ0: 固定スロットの事前確保（チェーン置換付き）
+    // 固定タスクを制約の厳しい順に配置し、ブロッカーを積極的に排除する
+    const fixedUnplaced = preReserveFixedSlots(fixedTasks, state, assignmentMap, maxTeacherPerDay, placementMap)
+    // 既に配置された固定タスクを除外
+    const placedFixedSet = new Set(fixedTasks.filter((t) => !fixedUnplaced.includes(t)))
+    const remainingTasks = tasks.filter((t) => !placedFixedSet.has(t))
+
+    // フェーズ1: 貪欲配置（固定で配置済みのタスクを除外）
+    const unplaced1 = greedyPlace(remainingTasks, state, maxTeacherPerDay, useMRV, placementMap, randomTopK)
 
     // フェーズ2: 未配置タスクを再度MRVで配置試行（他のタスクのスキップで空きができた可能性）
     const unplaced2 = greedyPlace(unplaced1, state, maxTeacherPerDay, true, placementMap, 1)
