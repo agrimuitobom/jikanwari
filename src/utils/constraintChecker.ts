@@ -206,26 +206,30 @@ export function detectConstraintConflicts(
   // 固定スロットの競合チェック（異なる割当が同じ固定スロットでクラスまたは教員が重複）
   // 連続授業ペアの場合、開始時限だけでなく次の時限もチェック対象
   const fixedSlotMap = new Map<string, Assignment[]>()
+
+  // 重複登録を防ぐためのセット（key:assignmentId）
+  const fixedSlotRegistered = new Set<string>()
+
+  function addToFixedSlotMap(key: string, assignment: Assignment): void {
+    const regKey = `${key}:${assignment.id}`
+    if (fixedSlotRegistered.has(regKey)) return // 同じ割当を同じスロットに二重登録しない
+    fixedSlotRegistered.add(regKey)
+    const list = fixedSlotMap.get(key)
+    if (list) {
+      list.push(assignment)
+    } else {
+      fixedSlotMap.set(key, [assignment])
+    }
+  }
+
   for (const assignment of assignments) {
     if (!assignment.fixedSlots || assignment.fixedSlots.length === 0) continue
     const subject = subjectMap.get(assignment.subjectId)
     for (const slot of assignment.fixedSlots) {
-      const key = `${slot.day}:${slot.period}`
-      const list = fixedSlotMap.get(key)
-      if (list) {
-        list.push(assignment)
-      } else {
-        fixedSlotMap.set(key, [assignment])
-      }
+      addToFixedSlotMap(`${slot.day}:${slot.period}`, assignment)
       // 連続授業ペアの場合、次の時限も登録（ペア占有を検出するため）
       if (subject && subject.consecutivePairs > 0 && slot.period < 6) {
-        const nextKey = `${slot.day}:${slot.period + 1}`
-        const nextList = fixedSlotMap.get(nextKey)
-        if (nextList) {
-          nextList.push(assignment)
-        } else {
-          fixedSlotMap.set(nextKey, [assignment])
-        }
+        addToFixedSlotMap(`${slot.day}:${slot.period + 1}`, assignment)
       }
     }
   }
