@@ -640,6 +640,101 @@ describe('scheduler', () => {
       }
     })
 
+    it('連続2コマの固定スロットで開始・終了両方がfixedSlotsにある場合でも正しく配置される', () => {
+      // バグ再現: ユーザーが火曜5限と6限の両方をfixedSlotsに登録
+      // 連続ペアとして5-6限を占有し、6限が余分な単独タスクにならないことを確認
+      const t1 = makeTeacher({ name: '教員1' })
+      const t2 = makeTeacher({ name: '教員2' })
+
+      const subject = makeSubject({
+        name: '課題研究E',
+        grade: 3,
+        category: '農業',
+        credits: 2,
+        weeklyFrequency: 2,
+        consecutivePairs: 1,
+      })
+
+      // fixedSlotsに5限と6限の両方を登録（ユーザーがよくやるパターン）
+      const a1 = makeAssignment({
+        classId: 'grade3-class1',
+        subjectId: subject.id,
+        teacherIds: [t1.id, t2.id],
+        weeklyCount: 2,
+        fixedSlots: [
+          { day: 'tuesday' as DayOfWeek, period: 5 as Period },
+          { day: 'tuesday' as DayOfWeek, period: 6 as Period },
+        ],
+      })
+
+      const result = runGenerator([t1, t2], [subject], [a1])
+
+      // 全2コマが配置されること（未配置なし）
+      expect(result.isComplete).toBe(true)
+      const entries = result.entries.filter((e) => e.assignmentId === a1.id)
+      expect(entries.length).toBe(2)
+      // 火曜5-6限に配置されること
+      for (const entry of entries) {
+        expect(entry.day).toBe('tuesday')
+        expect([5, 6]).toContain(entry.period)
+      }
+      // 未配置タスクがないこと
+      expect(result.unplacedTasks.length).toBe(0)
+    })
+
+    it('同時開講グループの連続2コマで開始・終了両方がfixedSlotsにある場合でも正しく配置される', () => {
+      const t1 = makeTeacher({ name: '教員1' })
+      const t2 = makeTeacher({ name: '教員2' })
+      const t3 = makeTeacher({ name: '教員3' })
+
+      const subject = makeSubject({
+        name: '課題研究',
+        grade: 3,
+        category: '農業',
+        credits: 2,
+        weeklyFrequency: 2,
+        consecutivePairs: 1,
+      })
+
+      // 2クラス同時開講、fixedSlotsに5限と6限の両方
+      const a1 = makeAssignment({
+        classId: 'grade3-class1',
+        subjectId: subject.id,
+        teacherIds: [t1.id, t2.id],
+        weeklyCount: 2,
+        fixedSlots: [
+          { day: 'tuesday' as DayOfWeek, period: 5 as Period },
+          { day: 'tuesday' as DayOfWeek, period: 6 as Period },
+        ],
+        simultaneousGroupId: 'kadai-e',
+      })
+      const a2 = makeAssignment({
+        classId: 'grade3-class2',
+        subjectId: subject.id,
+        teacherIds: [t1.id, t3.id],
+        weeklyCount: 2,
+        fixedSlots: [
+          { day: 'tuesday' as DayOfWeek, period: 5 as Period },
+          { day: 'tuesday' as DayOfWeek, period: 6 as Period },
+        ],
+        simultaneousGroupId: 'kadai-e',
+      })
+
+      const result = runGenerator([t1, t2, t3], [subject], [a1, a2])
+
+      expect(result.isComplete).toBe(true)
+      // 各割当が2コマずつ配置
+      for (const a of [a1, a2]) {
+        const entries = result.entries.filter((e) => e.assignmentId === a.id)
+        expect(entries.length).toBe(2)
+        for (const entry of entries) {
+          expect(entry.day).toBe('tuesday')
+          expect([5, 6]).toContain(entry.period)
+        }
+      }
+      expect(result.unplacedTasks.length).toBe(0)
+    })
+
     it('固定スロットのタスクが修復フェーズで別の場所に移動されない', () => {
       // 多くの割当で競合が発生する状況を作り、固定タスクが別の場所に行かないことを確認
       const teachers = Array.from({ length: 3 }, (_, i) => makeTeacher({ name: `教員${i + 1}` }))

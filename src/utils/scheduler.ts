@@ -132,6 +132,30 @@ function cellKey(day: DayOfWeek, period: Period, id: string): string {
 /** 連続授業ペアの開始時限候補（1-2, 3-4, 5-6） */
 const CONSECUTIVE_STARTS: Period[] = [1, 3, 5]
 
+/**
+ * 連続ペアの固定スロット処理: ペアの開始時限を取得した後、
+ * fixedSlots内に同日の(startPeriod+1)が存在するならスキップする。
+ * （ユーザーが5限と6限の両方をfixedSlotsに登録しているケースへの対応）
+ *
+ * @param fixedSlots 固定スロット配列
+ * @param currentIdx 現在のfixedIdxの値（開始時限を消費した直後）
+ * @param startSlot 連続ペアの開始スロット
+ * @returns スキップした場合は1、しなかった場合は0
+ */
+function skipConsecutiveSecondHalf(
+  fixedSlots: { day: DayOfWeek; period: Period }[],
+  currentIdx: number,
+  startSlot: Slot,
+): number {
+  if (currentIdx < fixedSlots.length) {
+    const next = fixedSlots[currentIdx]
+    if (next.day === startSlot.day && next.period === ((startSlot.period + 1) as Period)) {
+      return 1 // このスロットをスキップ
+    }
+  }
+  return 0
+}
+
 function isTeacherAvailable(teacher: Teacher, day: DayOfWeek, period: Period): boolean {
   if (!teacher.availableDays.includes(day)) return false
   if (teacher.excludedSlots.some((s: TimeSlot) => s.day === day && s.period === period))
@@ -293,7 +317,11 @@ function buildTasks(
       const fixedSlot = fixedIdx < fixedSlots.length
         ? { day: fixedSlots[fixedIdx].day, period: fixedSlots[fixedIdx].period }
         : undefined
-      if (fixedSlot) fixedIdx++
+      if (fixedSlot) {
+        fixedIdx++
+        // 連続ペアの後半時限（startPeriod+1）もfixedSlotsにある場合はスキップ
+        fixedIdx += skipConsecutiveSecondHalf(fixedSlots, fixedIdx, fixedSlot)
+      }
       const priority = fixedSlot ? -1000 : calculatePriority(subject, teachers)
 
       tasks.push({
@@ -367,7 +395,11 @@ function buildTasks(
       const fixedSlot = fixedIdx < groupFixedSlots.length
         ? { day: groupFixedSlots[fixedIdx].day, period: groupFixedSlots[fixedIdx].period }
         : undefined
-      if (fixedSlot) fixedIdx++
+      if (fixedSlot) {
+        fixedIdx++
+        // 連続ペアの後半時限もfixedSlotsにある場合はスキップ
+        fixedIdx += skipConsecutiveSecondHalf(groupFixedSlots, fixedIdx, fixedSlot)
+      }
 
       if (fixedSlot) {
         tasks.push({
