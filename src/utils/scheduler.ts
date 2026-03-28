@@ -362,6 +362,10 @@ function buildTasks(
         priority -= 100 // 連続タスクボーナス
         priority -= groupAssignments.length * 30
 
+        // 教科カテゴリ優先度（グループ内の最優先カテゴリを適用）
+        const catBonus = Math.min(...groupSubjects.map((s) => getCategoryPriorityBonus(s.category)))
+        priority += catBonus
+
         const minAvailDays = Math.min(...allTeachers.map((t) => t.availableDays.length))
         priority -= (5 - minAvailDays) * 10
 
@@ -406,6 +410,10 @@ function buildTasks(
         priority -= allTeachers.length * 20
         priority -= groupAssignments.length * 30
 
+        // 教科カテゴリ優先度（グループ内の最優先カテゴリを適用）
+        const catBonus = Math.min(...groupSubjects.map((s) => getCategoryPriorityBonus(s.category)))
+        priority += catBonus
+
         const minAvailDays = Math.min(...allTeachers.map((t) => t.availableDays.length))
         priority -= (5 - minAvailDays) * 10
 
@@ -432,8 +440,23 @@ function buildTasks(
   return tasks
 }
 
+/**
+ * 教科カテゴリに基づく優先度ボーナス。
+ * 農業科目は配置が最も複雑なため最優先、次に家庭科を優先する。
+ */
+function getCategoryPriorityBonus(category: string): number {
+  switch (category) {
+    case '農業': return -500   // 最優先
+    case '家庭科': return -300  // 次に優先
+    default: return 0
+  }
+}
+
 function calculatePriority(subject: Subject, teachers: Teacher[]): number {
   let priority = 0
+
+  // 教科カテゴリ優先度: 農業 → 家庭科 → その他
+  priority += getCategoryPriorityBonus(subject.category)
 
   // 連続授業は配置先が限定される → 最優先（calculatePriority自体は科目レベル）
   if (subject.consecutivePairs > 0) priority -= 100
@@ -1888,6 +1911,37 @@ export function* generateSchedule(
   }
   allTasks.sort((a, b) => a.priority - b.priority)
 
+  // 教科カテゴリで非固定タスクを分類: 農業 → 家庭科 → その他
+  // 全リスタート戦略で この順序を保証する
+  const agricultureTasks: ScheduleTask[] = []
+  const homeEcTasks: ScheduleTask[] = []
+  const otherCategoryTasks: ScheduleTask[] = []
+  for (const task of nonFixedTasks) {
+    const categories = task.subjects.map((s) => s.category)
+    if (categories.includes('農業')) {
+      agricultureTasks.push(task)
+    } else if (categories.includes('家庭科')) {
+      homeEcTasks.push(task)
+    } else {
+      otherCategoryTasks.push(task)
+    }
+  }
+
+  /**
+   * 教科カテゴリ順序を保証してタスク配列を構築する。
+   * 各カテゴリ内の順序は orderFn で制御する。
+   */
+  function buildCategoryOrderedTasks(
+    orderFn: (tasks: ScheduleTask[]) => ScheduleTask[],
+  ): ScheduleTask[] {
+    return [
+      ...fixedTasks,
+      ...orderFn(agricultureTasks),
+      ...orderFn(homeEcTasks),
+      ...orderFn(otherCategoryTasks),
+    ]
+  }
+
   // クラスごとのタスク分類（クラスベース順序戦略用）
   const tasksByClass = new Map<string, ScheduleTask[]>()
   for (const task of nonFixedTasks) {
@@ -1910,41 +1964,56 @@ export function* generateSchedule(
     }
 
     // --- 多様なリスタート戦略 ---
+    // 全戦略で配置順序を保証: 固定 → 農業 → 家庭科 → その他
     let tasks: ScheduleTask[]
     const strategy = pass % 7 // 7種類の戦略をローテーション
 
     if (pass === 0) {
-      // 初回: 静的優先度順（制約が厳しいものから）
-      tasks = [...allTasks]
+      // 初回: 教科カテゴリ順 × 静的優先度順（制約が厳しいものから）
+      tasks = buildCategoryOrderedTasks((t) => [...t].sort((a, b) => a.priority - b.priority))
     } else if (strategy === 1 && previousUnplacedTasks.length > 0) {
       // 前パスの未配置タスクを最優先で配置し、残りをシャッフル
+      // ただし教科カテゴリ順は維持: 未配置の農業→未配置の家庭科→未配置のその他→残り
       const unplacedSet = new Set(previousUnplacedTasks)
-      const otherNonFixed = nonFixedTasks.filter((t) => !unplacedSet.has(t))
-      tasks = [...fixedTasks, ...previousUnplacedTasks, ...shuffleArray(otherNonFixed)]
+      const unplacedAgri = previousUnplacedTasks.filter((t) => t.subjects.some((s) => s.category === '農業'))
+      const unplacedHome = previousUnplacedTasks.filter((t) => !t.subjects.some((s) => s.category === '農業') && t.subjects.some((s) => s.category === '家庭科'))
+      const unplacedOther = previousUnplacedTasks.filter((t) => !t.subjects.some((s) => s.category === '農業') && !t.subjects.some((s) => s.category === '家庭科'))
+      const remainAgri = agricultureTasks.filter((t) => !unplacedSet.has(t))
+      const remainHome = homeEcTasks.filter((t) => !unplacedSet.has(t))
+      const remainOther = otherCategoryTasks.filter((t) => !unplacedSet.has(t))
+      tasks = [
+        ...fixedTasks,
+        ...unplacedAgri, ...shuffleArray(remainAgri),
+        ...unplacedHome, ...shuffleArray(remainHome),
+        ...unplacedOther, ...shuffleArray(remainOther),
+      ]
     } else if (strategy === 2) {
-      // クラスベース順序: クラスごとにまとめて配置（同クラス内での衝突を減らす）
-      const classIds = shuffleArray([...tasksByClass.keys()])
-      const classOrdered: ScheduleTask[] = []
-      for (const classId of classIds) {
-        const classTasks = tasksByClass.get(classId) ?? []
-        classOrdered.push(...shuffleArray(classTasks))
-      }
-      tasks = [...fixedTasks, ...classOrdered]
+      // クラスベース順序: 各カテゴリ内でクラスごとにまとめて配置
+      tasks = buildCategoryOrderedTasks((catTasks) => {
+        const byClass = new Map<string, ScheduleTask[]>()
+        for (const t of catTasks) {
+          const cid = t.assignments[0]?.classId ?? ''
+          if (!byClass.has(cid)) byClass.set(cid, [])
+          byClass.get(cid)!.push(t)
+        }
+        const result: ScheduleTask[] = []
+        for (const cid of shuffleArray([...byClass.keys()])) {
+          result.push(...shuffleArray(byClass.get(cid)!))
+        }
+        return result
+      })
     } else if (strategy === 3) {
-      // 逆優先度順: 通常とは逆に制約の緩いタスクから配置
-      // （厳しいタスク用の空きスロットをより確保する狙い）
-      const reversed = [...nonFixedTasks].sort((a, b) => b.priority - a.priority)
-      tasks = [...fixedTasks, ...reversed]
+      // 逆優先度順（各カテゴリ内で）: 制約の緩いタスクから配置
+      tasks = buildCategoryOrderedTasks((t) => [...t].sort((a, b) => b.priority - a.priority))
     } else if (strategy === 4) {
-      // 実際の候補数順（動的MRV風）: 候補が少ないものから
-      const sorted = [...nonFixedTasks].sort((a, b) => {
+      // 実際の候補数順（動的MRV風）: 各カテゴリ内で候補が少ないものから
+      tasks = buildCategoryOrderedTasks((t) => [...t].sort((a, b) => {
         const aAvail = taskAvailability.get(a) ?? 30
         const bAvail = taskAvailability.get(b) ?? 30
         return aAvail - bAvail
-      })
-      tasks = [...fixedTasks, ...sorted]
+      }))
     } else if (strategy === 5 && previousUnplacedTasks.length > 0) {
-      // 未配置タスクとその関連タスク（同教員・同クラス）を最優先
+      // 未配置タスクとその関連タスクを最優先（カテゴリ順維持）
       const unplacedSet = new Set(previousUnplacedTasks)
       const relatedTeacherIds = new Set<string>()
       const relatedClassIds = new Set<string>()
@@ -1954,29 +2023,33 @@ export function* generateSchedule(
           for (const teacher of tg) relatedTeacherIds.add(teacher.id)
         }
       }
-      const related: ScheduleTask[] = []
-      const other: ScheduleTask[] = []
-      for (const t of nonFixedTasks) {
-        if (unplacedSet.has(t)) continue
-        let isRelated = false
-        for (const a of t.assignments) {
-          if (relatedClassIds.has(a.classId)) { isRelated = true; break }
-        }
-        if (!isRelated) {
-          for (const tg of t.teacherGroups) {
-            for (const teacher of tg) {
-              if (relatedTeacherIds.has(teacher.id)) { isRelated = true; break }
-            }
-            if (isRelated) break
+      // 各カテゴリ内で「未配置→関連→その他」の順
+      tasks = buildCategoryOrderedTasks((catTasks) => {
+        const unplaced: ScheduleTask[] = []
+        const related: ScheduleTask[] = []
+        const rest: ScheduleTask[] = []
+        for (const t of catTasks) {
+          if (unplacedSet.has(t)) { unplaced.push(t); continue }
+          let isRelated = false
+          for (const a of t.assignments) {
+            if (relatedClassIds.has(a.classId)) { isRelated = true; break }
           }
+          if (!isRelated) {
+            for (const tg of t.teacherGroups) {
+              for (const teacher of tg) {
+                if (relatedTeacherIds.has(teacher.id)) { isRelated = true; break }
+              }
+              if (isRelated) break
+            }
+          }
+          if (isRelated) related.push(t)
+          else rest.push(t)
         }
-        if (isRelated) related.push(t)
-        else other.push(t)
-      }
-      tasks = [...fixedTasks, ...previousUnplacedTasks, ...shuffleArray(related), ...shuffleArray(other)]
+        return [...unplaced, ...shuffleArray(related), ...shuffleArray(rest)]
+      })
     } else {
-      // デフォルト: 固定スロットを先頭に保ち、残りをシャッフル
-      tasks = [...fixedTasks, ...shuffleArray(nonFixedTasks)]
+      // デフォルト: 教科カテゴリ順 × シャッフル
+      tasks = buildCategoryOrderedTasks((t) => shuffleArray([...t]))
     }
 
     // ランダム性の制御: パスによって上位N件から選択
