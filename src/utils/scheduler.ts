@@ -2,6 +2,7 @@ import type {
   Teacher,
   Subject,
   Assignment,
+  Room,
   ScheduleEntry,
   DayOfWeek,
   Period,
@@ -61,6 +62,8 @@ interface ScheduleTask {
   subjects: Subject[]
   /** 各割当ごとの担当教員（assignments と同じ順序） */
   teacherGroups: Teacher[][]
+  /** 各割当ごとの使用施設（assignments と同じ順序、未指定ならundefined） */
+  rooms: (Room | undefined)[]
   /** 連続授業か */
   isConsecutive: boolean
   /** タスクの優先度スコア（低いほど先に配置 = 制約が厳しい） */
@@ -98,6 +101,8 @@ interface BoardState {
   classGrid: Map<string, string>
   /** [day][period][teacherId] => assignmentId */
   teacherGrid: Map<string, string>
+  /** [day][period][roomId] => assignmentId（施設の重複検出用） */
+  roomGrid: Map<string, string>
   /** 配置済みエントリ */
   entries: ScheduleEntry[]
   /** assignmentId => 配置済みコマ数（weeklyCount超過を防止） */
@@ -140,6 +145,16 @@ function isSlotFreeForClass(state: BoardState, day: DayOfWeek, period: Period, c
 
 function isSlotFreeForTeacher(state: BoardState, day: DayOfWeek, period: Period, teacherId: string): boolean {
   return !state.teacherGrid.has(cellKey(day, period, teacherId))
+}
+
+function isSlotFreeForRoom(state: BoardState, day: DayOfWeek, period: Period, roomId: string): boolean {
+  return !state.roomGrid.has(cellKey(day, period, roomId))
+}
+
+function isRoomAvailable(room: Room, day: DayOfWeek, period: Period): boolean {
+  if (room.availableDays && !room.availableDays.includes(day)) return false
+  if (room.excludedSlots?.some((s: TimeSlot) => s.day === day && s.period === period)) return false
+  return true
 }
 
 function classDaySubjectKey(day: DayOfWeek, classId: string, subjectId: string): string {
@@ -215,6 +230,7 @@ function createEmptyState(): BoardState {
   return {
     classGrid: new Map(),
     teacherGrid: new Map(),
+    roomGrid: new Map(),
     entries: [],
     assignmentPlacedCount: new Map(),
     classDaySubjectCount: new Map(),
@@ -230,21 +246,25 @@ function buildTasks(
   assignments: Assignment[],
   subjectMap: Map<string, Subject>,
   teacherMap: Map<string, Teacher>,
+  roomMap: Map<string, Room>,
 ): ScheduleTask[] {
   const tasks: ScheduleTask[] = []
   let taskIndex = 0
 
-  // 同時開講グループごとに割当を集約
+  // 同時開講グループ・講座グループごとに割当を集約
+  // courseGroupId は simultaneousGroupId と同じ「同時配置」の仕組みで処理する
+  // （講座グループ内のタスクは全て同じ曜日・時限に配置される）
   const simultaneousGroups = new Map<string, Assignment[]>()
   const standaloneAssignments: Assignment[] = []
 
   for (const assignment of assignments) {
-    if (assignment.simultaneousGroupId) {
-      const group = simultaneousGroups.get(assignment.simultaneousGroupId)
+    const groupId = assignment.simultaneousGroupId ?? assignment.courseGroupId
+    if (groupId) {
+      const group = simultaneousGroups.get(groupId)
       if (group) {
         group.push(assignment)
       } else {
-        simultaneousGroups.set(assignment.simultaneousGroupId, [assignment])
+        simultaneousGroups.set(groupId, [assignment])
       }
     } else {
       standaloneAssignments.push(assignment)
@@ -261,6 +281,7 @@ function buildTasks(
       .filter((t): t is Teacher => t !== undefined)
     if (teachers.length === 0) continue
 
+    const room = assignment.roomId ? roomMap.get(assignment.roomId) : undefined
     const consecutivePairs = subject.consecutivePairs
     const consecutiveSlots = consecutivePairs * 2
     const singleSlots = assignment.weeklyCount - consecutiveSlots
@@ -279,6 +300,7 @@ function buildTasks(
         assignments: [assignment],
         subjects: [subject],
         teacherGroups: [teachers],
+        rooms: [room],
         isConsecutive: true,
         priority: priority - 100, // 連続タスクは制約が厳しいので優先
         fixedSlot,
@@ -298,6 +320,7 @@ function buildTasks(
         assignments: [assignment],
         subjects: [subject],
         teacherGroups: [teachers],
+        rooms: [room],
         isConsecutive: false,
         priority,
         fixedSlot,
@@ -310,6 +333,7 @@ function buildTasks(
   for (const [groupId, groupAssignments] of simultaneousGroups) {
     const groupSubjects: Subject[] = []
     const groupTeacherGroups: Teacher[][] = []
+    const groupRooms: (Room | undefined)[] = []
     let weeklyCount = 0
     // 同時開講グループの連続ペア数は最大のものを採用
     let maxConsecutivePairs = 0
@@ -326,6 +350,7 @@ function buildTasks(
 
       groupSubjects.push(subject)
       groupTeacherGroups.push(teachers)
+      groupRooms.push(assignment.roomId ? roomMap.get(assignment.roomId) : undefined)
       if (subject.consecutivePairs > maxConsecutivePairs) maxConsecutivePairs = subject.consecutivePairs
       weeklyCount = Math.max(weeklyCount, assignment.weeklyCount)
     }
@@ -349,6 +374,7 @@ function buildTasks(
           assignments: groupAssignments,
           subjects: groupSubjects,
           teacherGroups: groupTeacherGroups,
+          rooms: groupRooms,
           isConsecutive: true,
           priority: -1500,
           simultaneousGroupId: groupId,
@@ -357,7 +383,7 @@ function buildTasks(
         })
       } else {
         let priority = -200
-        const allTeachers = getAllTeachersFlat({ assignments: groupAssignments, subjects: groupSubjects, teacherGroups: groupTeacherGroups, isConsecutive: true, priority: 0, originalIndex: 0 })
+        const allTeachers = getAllTeachersFlat({ assignments: groupAssignments, subjects: groupSubjects, teacherGroups: groupTeacherGroups, rooms: groupRooms, isConsecutive: true, priority: 0, originalIndex: 0 })
         priority -= allTeachers.length * 20
         priority -= 100 // 連続タスクボーナス
         priority -= groupAssignments.length * 30
@@ -378,6 +404,7 @@ function buildTasks(
           assignments: groupAssignments,
           subjects: groupSubjects,
           teacherGroups: groupTeacherGroups,
+          rooms: groupRooms,
           isConsecutive: true,
           priority,
           simultaneousGroupId: groupId,
@@ -398,6 +425,7 @@ function buildTasks(
           assignments: groupAssignments,
           subjects: groupSubjects,
           teacherGroups: groupTeacherGroups,
+          rooms: groupRooms,
           isConsecutive: false,
           priority: -1500,
           simultaneousGroupId: groupId,
@@ -406,7 +434,7 @@ function buildTasks(
         })
       } else {
         let priority = -200
-        const allTeachers = getAllTeachersFlat({ assignments: groupAssignments, subjects: groupSubjects, teacherGroups: groupTeacherGroups, isConsecutive: false, priority: 0, originalIndex: 0 })
+        const allTeachers = getAllTeachersFlat({ assignments: groupAssignments, subjects: groupSubjects, teacherGroups: groupTeacherGroups, rooms: groupRooms, isConsecutive: false, priority: 0, originalIndex: 0 })
         priority -= allTeachers.length * 20
         priority -= groupAssignments.length * 30
 
@@ -426,6 +454,7 @@ function buildTasks(
           assignments: groupAssignments,
           subjects: groupSubjects,
           teacherGroups: groupTeacherGroups,
+          rooms: groupRooms,
           isConsecutive: false,
           priority,
           simultaneousGroupId: groupId,
@@ -545,8 +574,9 @@ function canPlaceTask(
     const assignment = task.assignments[i]
     const subject = task.subjects[i]
     const teachers = task.teacherGroups[i]
+    const room = task.rooms[i]
 
-    if (!canPlaceSingle(assignment, subject, teachers, state, day, period)) {
+    if (!canPlaceSingle(assignment, subject, teachers, state, day, period, room)) {
       return false
     }
   }
@@ -561,6 +591,7 @@ function canPlaceSingle(
   state: BoardState,
   day: DayOfWeek,
   period: Period,
+  room?: Room,
 ): boolean {
   const classId = assignment.classId
 
@@ -591,6 +622,12 @@ function canPlaceSingle(
   for (const teacher of teachers) {
     if (!isTeacherAvailable(teacher, day, period)) return false
     if (!isSlotFreeForTeacher(state, day, period, teacher.id)) return false
+  }
+
+  // 施設の利用可能・重複チェック
+  if (room) {
+    if (!isRoomAvailable(room, day, period)) return false
+    if (!isSlotFreeForRoom(state, day, period, room.id)) return false
   }
 
   return true
@@ -763,10 +800,16 @@ function placeTask(
     ? [period, (period + 1) as Period]
     : [period]
 
+  // 同時開講グループで同じ教員が複数割当にまたがる場合、
+  // teacherGrid/teacherDayCountの重複登録を防ぐ。
+  // 実際は同じ時間に同時に教えるので、教員のコマ数は1回だけカウントする。
+  const teacherRegistered = new Set<string>() // "day:period:teacherId" で追跡
+
   for (let i = 0; i < task.assignments.length; i++) {
     const assignment = task.assignments[i]
     const subject = task.subjects[i]
     const teachers = task.teacherGroups[i]
+    const room = task.rooms[i]
     const classId = assignment.classId
 
     for (let j = 0; j < periods.length; j++) {
@@ -785,10 +828,20 @@ function placeTask(
       // グリッドに登録
       state.classGrid.set(cellKey(day, p, classId), assignment.id)
       for (const teacher of teachers) {
-        state.teacherGrid.set(cellKey(day, p, teacher.id), assignment.id)
-        // 教員日別コマ数を加算
-        const tdKey = teacherDayKey(day, teacher.id)
-        state.teacherDayCount.set(tdKey, (state.teacherDayCount.get(tdKey) ?? 0) + 1)
+        const teacherCellKey = cellKey(day, p, teacher.id)
+        state.teacherGrid.set(teacherCellKey, assignment.id)
+
+        // 同時開講グループ内で同じ教員が既に登録済みなら、teacherDayCountは加算しない
+        if (!teacherRegistered.has(teacherCellKey)) {
+          teacherRegistered.add(teacherCellKey)
+          const tdKey = teacherDayKey(day, teacher.id)
+          state.teacherDayCount.set(tdKey, (state.teacherDayCount.get(tdKey) ?? 0) + 1)
+        }
+      }
+
+      // 施設グリッドに登録
+      if (room) {
+        state.roomGrid.set(cellKey(day, p, room.id), assignment.id)
       }
 
       // 同日同科目カウントを加算
@@ -814,24 +867,39 @@ function removeEntries(
   state: BoardState,
   entries: ScheduleEntry[],
 ): void {
+  // 同時開講グループで同じ教員が複数エントリにまたがる場合、
+  // teacherDayCountの重複減算を防ぐ
+  const teacherDeregistered = new Set<string>() // "day:period:teacherId" で追跡
+
   for (const entry of entries) {
     state.classGrid.delete(cellKey(entry.day, entry.period, entry.classId))
 
-    // エントリのassignmentIdに対応するteachersを見つける
+    // エントリのassignmentIdに対応するteachers/room/subjectを見つける
     const assignmentIdx = task.assignments.findIndex((a) => a.id === entry.assignmentId)
     const teachers = assignmentIdx >= 0 ? task.teacherGroups[assignmentIdx] : getAllTeachersFlat(task)
     const subject = assignmentIdx >= 0 ? task.subjects[assignmentIdx] : task.subjects[0]
+    const room = assignmentIdx >= 0 ? task.rooms[assignmentIdx] : undefined
 
     for (const teacher of teachers) {
       state.teacherGrid.delete(cellKey(entry.day, entry.period, teacher.id))
-      // 教員日別コマ数を減算
-      const tdKey = teacherDayKey(entry.day, teacher.id)
-      const current = state.teacherDayCount.get(tdKey) ?? 0
-      if (current <= 1) {
-        state.teacherDayCount.delete(tdKey)
-      } else {
-        state.teacherDayCount.set(tdKey, current - 1)
+
+      // 同時開講グループ内で同じ教員が既に減算済みなら、teacherDayCountは減算しない
+      const teacherCellKey = cellKey(entry.day, entry.period, teacher.id)
+      if (!teacherDeregistered.has(teacherCellKey)) {
+        teacherDeregistered.add(teacherCellKey)
+        const tdKey = teacherDayKey(entry.day, teacher.id)
+        const current = state.teacherDayCount.get(tdKey) ?? 0
+        if (current <= 1) {
+          state.teacherDayCount.delete(tdKey)
+        } else {
+          state.teacherDayCount.set(tdKey, current - 1)
+        }
       }
+    }
+
+    // 施設グリッドから除去
+    if (room) {
+      state.roomGrid.delete(cellKey(entry.day, entry.period, room.id))
     }
 
     // 同日同科目カウントを減算
@@ -1287,6 +1355,7 @@ function saveState(
   return {
     classGrid: new Map(state.classGrid),
     teacherGrid: new Map(state.teacherGrid),
+    roomGrid: new Map(state.roomGrid),
     entries: [...state.entries],
     assignmentPlacedCount: new Map(state.assignmentPlacedCount),
     classDaySubjectCount: new Map(state.classDaySubjectCount),
@@ -1303,6 +1372,7 @@ function loadState(
 ): void {
   state.classGrid = saved.classGrid
   state.teacherGrid = saved.teacherGrid
+  state.roomGrid = saved.roomGrid
   state.entries = saved.entries
   state.assignmentPlacedCount = saved.assignmentPlacedCount
   state.classDaySubjectCount = saved.classDaySubjectCount
@@ -1805,6 +1875,7 @@ export function* generateSchedule(
   subjects: Subject[],
   assignments: Assignment[],
   options?: SchedulerOptions,
+  rooms?: Room[],
 ): Generator<SchedulerProgress, SchedulerResult, undefined> {
   const maxTeacherPerDay = options?.maxTeacherPeriodsPerDay ?? DEFAULT_MAX_TEACHER_PERIODS_PER_DAY
   const maxIter = options?.maxIterations ?? 200_000
@@ -1814,6 +1885,7 @@ export function* generateSchedule(
   const teacherMap = new Map(teachers.map((t) => [t.id, t]))
   const subjectMap = new Map(subjects.map((s) => [s.id, s]))
   const assignmentMap = new Map(assignments.map((a) => [a.id, a]))
+  const roomMap = new Map((rooms ?? []).map((r) => [r.id, r]))
 
   // ロック済みエントリの処理（部分再生成用）
   const lockedEntries = options?.lockedEntries ?? []
@@ -1849,7 +1921,7 @@ export function* generateSchedule(
   }
 
   // タスク生成（ロック済み分を除外した残りのみ）
-  const allTasks = buildTasks(effectiveAssignments, subjectMap, teacherMap)
+  const allTasks = buildTasks(effectiveAssignments, subjectMap, teacherMap, roomMap)
   const totalTasks = allTasks.length
 
   if (totalTasks === 0) {
