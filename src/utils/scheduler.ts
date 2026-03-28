@@ -692,6 +692,10 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
  * LCV（最小制約値）ヒューリスティック付きスロットスコアリング。
  * 他の未配置タスクへの影響を考慮し、選択肢を最も残すスロットを優先する。
  */
+/**
+ * LCV付きスコアリング（軽量版）。
+ * getCandidateSlots呼び出しを廃止し、スロット競合の密度で推定する。
+ */
 function scoreCandidateSlotWithLCV(
   task: ScheduleTask,
   slot: Slot,
@@ -702,46 +706,34 @@ function scoreCandidateSlotWithLCV(
   // 基本スコア
   let score = scoreCandidateSlot(task, slot, state, maxTeacherPerDay)
 
-  // LCV: このスロットに配置した場合、他タスクの候補数への影響を推定
-  // 全タスクを検査するとO(n^2)になるため、影響を受けうるタスクのみチェック
+  // 軽量LCV: このスロット（day, period）に何個の他タスクが影響を受けるか数えるだけ
+  // getCandidateSlotsは呼ばず、直接的な競合数をペナルティにする
+  const taskClassIds = new Set(task.assignments.map((a) => a.classId))
+  const taskTeacherIds = new Set<string>()
+  for (const tg of task.teacherGroups) {
+    for (const t of tg) taskTeacherIds.add(t.id)
+  }
+
+  let affectedCount = 0
   for (const otherTask of otherTasks) {
     if (otherTask === task) continue
 
     let affected = false
     for (let i = 0; i < otherTask.assignments.length && !affected; i++) {
-      const otherAssignment = otherTask.assignments[i]
-      const otherTeachers = otherTask.teacherGroups[i]
-
-      // このスロットに配置すると、同じクラスの他タスクの候補が減る
-      if (otherAssignment.classId === task.assignments[0]?.classId) {
+      if (taskClassIds.has(otherTask.assignments[i].classId)) {
         affected = true
       }
-      // 共通教員がいる場合も候補が減る
       if (!affected) {
-        for (const ot of otherTeachers) {
-          for (const tg of task.teacherGroups) {
-            if (tg.some((t) => t.id === ot.id)) {
-              affected = true
-              break
-            }
-          }
-          if (affected) break
+        for (const t of otherTask.teacherGroups[i]) {
+          if (taskTeacherIds.has(t.id)) { affected = true; break }
         }
       }
     }
-
-    if (affected) {
-      // 影響を受けるタスクの現在の候補数を簡易推定
-      // 候補が少ないタスクを潰すほどペナルティが大きい
-      const otherCandidates = getCandidateSlots(otherTask, state)
-      if (otherCandidates.length <= 2) {
-        // 候補が非常に少ないタスクへの影響は大きなペナルティ
-        score -= 25
-      } else if (otherCandidates.length <= 5) {
-        score -= 8
-      }
-    }
+    if (affected) affectedCount++
   }
+
+  // 競合する他タスクが多いスロットはペナルティ（getCandidateSlots不要）
+  score -= affectedCount * 3
 
   return score
 }
@@ -754,6 +746,13 @@ function scoreCandidateSlotWithLCV(
  * 未配置タスクの中から、候補スロット数が最も少ないタスクのインデックスを返す。
  * 固定スロットのタスクは最優先で返す。
  */
+/**
+ * MRVヒューリスティック（サンプリング上限付き）。
+ * 大規模データ時に全タスクの候補数を計算するコストを抑制するため、
+ * 先頭の最大 MRV_SAMPLE_LIMIT 件 + 固定スロットタスクのみを評価する。
+ */
+const MRV_SAMPLE_LIMIT = 30
+
 function selectNextTaskMRV(
   remainingTasks: ScheduleTask[],
   state: BoardState,
@@ -762,21 +761,26 @@ function selectNextTaskMRV(
   let bestCandidates: Slot[] | null = null
   let bestCount = Infinity
 
+  const limit = Math.min(remainingTasks.length, MRV_SAMPLE_LIMIT)
+
   for (let i = 0; i < remainingTasks.length; i++) {
     const task = remainingTasks[i]
 
-    // 固定スロットタスクは最優先
+    // 固定スロットタスクは最優先（常にチェック）
     if (task.fixedSlot) {
       const candidates = getCandidateSlots(task, state)
       return { index: i, candidates }
     }
+
+    // サンプリング上限を超えたら打ち切り
+    if (i >= limit) continue
 
     const candidates = getCandidateSlots(task, state)
     if (candidates.length < bestCount) {
       bestCount = candidates.length
       bestIndex = i
       bestCandidates = candidates
-      // 候補が0なら即座に返す（これ以上良い選択はない）
+      // 候補が0なら即座に返す
       if (bestCount === 0) break
     }
   }
@@ -1202,24 +1206,28 @@ function preReserveFixedSlots(
 }
 
 /**
- * フォワードチェッキング: 配置後に残りタスクのいずれかが候補0になっていないか検査。
+ * フォワードチェッキング（軽量版）: 配置後に残りタスクのいずれかが候補0になっていないか検査。
  * 候補0のタスクが見つかった場合は false を返す（この配置はデッドエンドに至る）。
- * パフォーマンスのため、影響を受ける可能性のあるタスクのみ検査する。
+ * パフォーマンスのため、影響を受けるタスクの中から最大 FC_CHECK_LIMIT 件のみ検査する。
  */
+const FC_CHECK_LIMIT = 15
+
 function forwardCheck(
   placedTask: ScheduleTask,
   _slot: Slot,
   remainingTasks: ScheduleTask[],
   state: BoardState,
 ): boolean {
-  // 影響を受ける可能性のあるタスクのみチェック（同クラス or 共通教員）
   const placedClassIds = new Set(placedTask.assignments.map((a) => a.classId))
   const placedTeacherIds = new Set<string>()
   for (const tg of placedTask.teacherGroups) {
     for (const t of tg) placedTeacherIds.add(t.id)
   }
 
+  let checked = 0
   for (const other of remainingTasks) {
+    if (checked >= FC_CHECK_LIMIT) break
+
     let couldBeAffected = false
     for (const a of other.assignments) {
       if (placedClassIds.has(a.classId)) { couldBeAffected = true; break }
@@ -1234,7 +1242,7 @@ function forwardCheck(
     }
     if (!couldBeAffected) continue
 
-    // 影響を受ける可能性があるタスクの候補数をチェック
+    checked++
     const otherCandidates = getCandidateSlots(other, state)
     if (otherCandidates.length === 0) {
       return false // デッドエンド検出
@@ -2022,9 +2030,16 @@ export function* generateSchedule(
     tasksByClass.get(classId)!.push(task)
   }
 
+  // 全体の時間制限（30秒）
+  const schedulerStartTime = Date.now()
+  const MAX_SCHEDULER_MS = 30_000
+
   for (let pass = 0; pass < totalPasses; pass++) {
     // 完全解が見つかっていれば終了
     if (bestResult.isComplete) break
+
+    // 全体の時間制限チェック
+    if (Date.now() - schedulerStartTime > MAX_SCHEDULER_MS) break
 
     // ボード状態を初期化
     const state = createEmptyState()
@@ -2130,9 +2145,11 @@ export function* generateSchedule(
     // MRV方式は2回目以降で使用（初回は優先度順で安定した解を得る）
     const useMRV = pass > 0
 
-    // フォワードチェッキングとLCVは一部のパスで使用（計算コスト考慮）
-    const useForwardCheck = pass > 0 && (strategy === 1 || strategy === 4 || strategy === 5)
-    const useLCV = pass > 0 && (strategy === 2 || strategy === 4)
+    // フォワードチェッキングとLCVは少数のパスで使用（計算コスト抑制）
+    // タスク数が多い場合はさらに制限（50超で無効化）
+    const isSmallProblem = totalTasks <= 50
+    const useForwardCheck = isSmallProblem && pass > 0 && (strategy === 4)
+    const useLCV = isSmallProblem && pass > 0 && (strategy === 2)
 
     // フェーズ0: 固定スロットの事前確保（チェーン置換付き）
     // 固定タスクを制約の厳しい順に配置し、ブロッカーを積極的に排除する
@@ -2184,8 +2201,8 @@ export function* generateSchedule(
       }
     }
 
-    // 進捗を定期的に yield
-    if (pass % 20 === 0 || pass === totalPasses - 1) {
+    // 進捗を定期的に yield（5パスごと or 最終パス）
+    if (pass % 5 === 0 || pass === totalPasses - 1) {
       yield {
         placed: bestResult.entries.filter((e) => !e.isConsecutiveSecond).length,
         total: totalTasks,
