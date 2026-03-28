@@ -156,6 +156,38 @@ function skipConsecutiveSecondHalf(
   return 0
 }
 
+/**
+ * 連続ペア用の固定スロットを正規化する。
+ * ユーザーがペアの後半時限（2, 4, 6限）を固定スロットとして登録した場合、
+ * 開始時限（1, 3, 5限）に補正する。
+ * 例: 6限 → 5限（5-6限ペアの開始）、4限 → 3限
+ */
+function normalizeConsecutiveFixedSlot(slot: Slot): Slot {
+  if (CONSECUTIVE_STARTS.includes(slot.period)) {
+    return slot // 既に有効な開始時限
+  }
+  // 後半時限の場合、1つ前の時限をペア開始とする
+  const startPeriod = (slot.period - 1) as Period
+  if (CONSECUTIVE_STARTS.includes(startPeriod)) {
+    return { day: slot.day, period: startPeriod }
+  }
+  return slot // 該当しない場合はそのまま返す
+}
+
+/**
+ * fixedSlotsを時限順にソートし、連続ペアの重複を除去した配列を返す。
+ * 例: [{火,6},{火,5}] → [{火,5},{火,6}]（ソート）
+ */
+function sortFixedSlots(
+  slots: { day: DayOfWeek; period: Period }[],
+): { day: DayOfWeek; period: Period }[] {
+  return [...slots].sort((a, b) => {
+    const dayOrder = DAYS.indexOf(a.day) - DAYS.indexOf(b.day)
+    if (dayOrder !== 0) return dayOrder
+    return a.period - b.period
+  })
+}
+
 function isTeacherAvailable(teacher: Teacher, day: DayOfWeek, period: Period): boolean {
   if (!teacher.availableDays.includes(day)) return false
   if (teacher.excludedSlots.some((s: TimeSlot) => s.day === day && s.period === period))
@@ -309,15 +341,17 @@ function buildTasks(
     const consecutivePairs = subject.consecutivePairs
     const consecutiveSlots = consecutivePairs * 2
     const singleSlots = assignment.weeklyCount - consecutiveSlots
-    const fixedSlots = assignment.fixedSlots ?? []
+    const fixedSlots = sortFixedSlots(assignment.fixedSlots ?? [])
     let fixedIdx = 0
 
     // 連続ペアタスクを生成
     for (let i = 0; i < consecutivePairs; i++) {
-      const fixedSlot = fixedIdx < fixedSlots.length
+      let fixedSlot = fixedIdx < fixedSlots.length
         ? { day: fixedSlots[fixedIdx].day, period: fixedSlots[fixedIdx].period }
         : undefined
       if (fixedSlot) {
+        // 後半時限（2,4,6限）が指定された場合、開始時限に正規化
+        fixedSlot = normalizeConsecutiveFixedSlot(fixedSlot)
         fixedIdx++
         // 連続ペアの後半時限（startPeriod+1）もfixedSlotsにある場合はスキップ
         fixedIdx += skipConsecutiveSecondHalf(fixedSlots, fixedIdx, fixedSlot)
@@ -386,16 +420,18 @@ function buildTasks(
 
     const consecutiveSlots = maxConsecutivePairs * 2
     const singleSlots = weeklyCount - consecutiveSlots
-    // 同時開講グループの固定スロットは最初のassignmentから取得
-    const groupFixedSlots = groupAssignments[0]?.fixedSlots ?? []
+    // 同時開講グループの固定スロットは最初のassignmentから取得（ソート済み）
+    const groupFixedSlots = sortFixedSlots(groupAssignments[0]?.fixedSlots ?? [])
     let fixedIdx = 0
 
     // 連続ペアタスク
     for (let i = 0; i < maxConsecutivePairs; i++) {
-      const fixedSlot = fixedIdx < groupFixedSlots.length
+      let fixedSlot = fixedIdx < groupFixedSlots.length
         ? { day: groupFixedSlots[fixedIdx].day, period: groupFixedSlots[fixedIdx].period }
         : undefined
       if (fixedSlot) {
+        // 後半時限（2,4,6限）が指定された場合、開始時限に正規化
+        fixedSlot = normalizeConsecutiveFixedSlot(fixedSlot)
         fixedIdx++
         // 連続ペアの後半時限もfixedSlotsにある場合はスキップ
         fixedIdx += skipConsecutiveSecondHalf(groupFixedSlots, fixedIdx, fixedSlot)
