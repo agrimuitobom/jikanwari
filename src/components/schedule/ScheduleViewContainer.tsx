@@ -783,6 +783,7 @@ export function ScheduleViewContainer({
           {/* グリッド */}
           <div className="flex-1 min-w-0 card p-2 sm:p-4 print:shadow-none print:border-none">
             <TimetableGrid
+              key={`${viewMode}-${selectedTargetId}`}
               entries={entries}
               teachers={teachers}
               subjects={subjects}
