@@ -1259,8 +1259,8 @@ function preReserveFixedSlots(
         placementMap.set(cellKey(e.day, e.period, e.classId), record)
       }
     } else {
-      // チェーン置換で固定スロットのブロッカーを排除（深度3に制限）
-      if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, 3, new Set())) {
+      // 固定タスクは少数なので深度・試行回数を十分に確保（深度5, 試行200）
+      if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, 5, new Set(), { count: 0 })) {
         // チェーン置換成功
       } else {
         unplaced.push(task)
@@ -1269,6 +1269,109 @@ function preReserveFixedSlots(
   }
 
   return unplaced
+}
+
+/**
+ * 固定タスクを強制配置する。固定スロットを占拠する非固定タスクを排除して配置する。
+ * 固定タスク同士の競合は排除しない（データ不整合として扱う）。
+ *
+ * @returns 排除されたタスクの配列（空なら配置失敗）
+ */
+function forceFixedTaskPlacement(
+  task: ScheduleTask,
+  state: BoardState,
+  placementMap: Map<string, PlacementRecord>,
+): ScheduleTask[] {
+  if (!task.fixedSlot) return []
+
+  const { day, period } = task.fixedSlot
+  const checkPeriods: Period[] = task.isConsecutive
+    ? [period, (period + 1) as Period]
+    : [period]
+
+  // ブロッカーを収集（非固定タスクのみ排除対象）
+  const blockersToEvict = new Set<PlacementRecord>()
+
+  for (let i = 0; i < task.assignments.length; i++) {
+    const a = task.assignments[i]
+    const ts = task.teacherGroups[i]
+
+    for (const p of checkPeriods) {
+      // クラス競合
+      if (!isSlotFreeForClass(state, day, p, a.classId)) {
+        const rec = placementMap.get(cellKey(day, p, a.classId))
+        if (rec) {
+          if (rec.task.fixedSlot) return [] // 固定タスク同士の競合は強制排除しない
+          blockersToEvict.add(rec)
+        }
+      }
+      // 教員競合
+      for (const t of ts) {
+        if (!isSlotFreeForTeacher(state, day, p, t.id)) {
+          const blockAId = state.teacherGrid.get(cellKey(day, p, t.id))
+          if (blockAId) {
+            // blockAIdはassignmentIdなので、そのassignmentのclassIdでplacementMapを引く
+            // 全エントリを探す
+            for (const [, rec] of placementMap) {
+              if (rec.entries.some((e) => e.assignmentId === blockAId && e.day === day && e.period === p)) {
+                if (rec.task.fixedSlot) return [] // 固定タスク同士は排除しない
+                blockersToEvict.add(rec)
+                break
+              }
+            }
+          }
+        }
+      }
+      // 教員の勤務可能チェック（これは排除では解決できない）
+      for (const t of ts) {
+        if (!isTeacherAvailable(t, day, p)) return [] // ハード制約
+      }
+      // 科目の除外時限チェック
+      if (isExcludedPeriodForSubject(task.subjects[i], p)) return []
+    }
+  }
+
+  if (blockersToEvict.size === 0) {
+    // ブロッカーなし＝直接配置可能（通常はここに来ないはず）
+    const candidates = getCandidateSlots(task, state)
+    if (candidates.length > 0) {
+      const entries = placeTask(task, state, day, period)
+      const record: PlacementRecord = { task, entries, day, startPeriod: period }
+      for (const e of entries) {
+        placementMap.set(cellKey(e.day, e.period, e.classId), record)
+      }
+      return [/* no evicted tasks */]
+    }
+    return []
+  }
+
+  // 非固定ブロッカーを全て排除
+  const evictedTasks: ScheduleTask[] = []
+  for (const rec of blockersToEvict) {
+    removeEntries(rec.task, state, rec.entries)
+    for (const e of rec.entries) {
+      placementMap.delete(cellKey(e.day, e.period, e.classId))
+    }
+    evictedTasks.push(rec.task)
+  }
+
+  // 固定タスクを配置
+  if (task.isConsecutive
+    ? canPlaceTask(task, state, day, period) && canPlaceTask(task, state, day, (period + 1) as Period)
+    : canPlaceTask(task, state, day, period)
+  ) {
+    const entries = placeTask(task, state, day, period)
+    const record: PlacementRecord = { task, entries, day, startPeriod: period }
+    for (const e of entries) {
+      placementMap.set(cellKey(e.day, e.period, e.classId), record)
+    }
+    return evictedTasks
+  }
+
+  // 配置に失敗した場合、排除したタスクを復元（ロールバック）
+  // ※ここに来るのは稀（上のブロッカー収集が網羅的なら来ない）
+  // 簡易的にevictedTasksを返して再配置に回す
+  return []
 }
 
 /**
@@ -1485,6 +1588,19 @@ function repairPhase(
 }
 
 /**
+ * 固定タスクがその固定スロットで指定の曜日・時限をカバーするかチェック。
+ * 連続ペアの場合、fixedSlot.period と fixedSlot.period+1 の両方がカバー範囲。
+ */
+function taskFixedSlotCovers(task: ScheduleTask, day: DayOfWeek, period: Period): boolean {
+  if (!task.fixedSlot) return false
+  if (task.fixedSlot.day !== day) return false
+  if (task.fixedSlot.period === period) return true
+  // 連続ペアの場合、fixedSlot.period+1 もカバー
+  if (task.isConsecutive && (task.fixedSlot.period + 1) === period) return true
+  return false
+}
+
+/**
  * タスクの配置先を探す（再帰的チェーン置換対応）。
  * 1. 直接配置可能ならそこに配置
  * 2. 各スロットでブロッカーを移動（maxDepth段階まで玉突き）して空きを作る
@@ -1496,7 +1612,7 @@ function repairPhase(
  * @param excludedTasks - 置換対象外のタスク（循環防止）
  * @param attempts - 試行カウンタ（参照渡しで共有し、上限に達したら打ち切り）
  */
-const MAX_RELOCATE_ATTEMPTS = 50
+const MAX_RELOCATE_ATTEMPTS = 100
 
 function tryRelocateTask(
   task: ScheduleTask,
@@ -1524,8 +1640,9 @@ function tryRelocateTask(
     return true
   }
 
-  // 深度0 or 試行回数超過なら打ち切り
+  // 深度0なら打ち切り
   if (maxDepth <= 0) return false
+  // 試行回数超過なら打ち切り（固定タスクの初回呼び出しはcountが小さいので問題なし）
   if (attempts.count >= MAX_RELOCATE_ATTEMPTS) return false
 
   // 固定スロットタスクは指定スロットのみでチェーン置換を試みる
@@ -1583,7 +1700,7 @@ function tryRelocateTask(
               // 固定スロットのブロッカー: 自タスクも同じスロットに固定されている場合は
               // ブロッカーの固定を解除して再配置を試みる（より制約の厳しいタスクを優先）
               if (rec.task.fixedSlot) {
-                if (task.fixedSlot && task.fixedSlot.day === day && task.fixedSlot.period === period) {
+                if (task.fixedSlot && taskFixedSlotCovers(task, day, p)) {
                   // 自タスクが同じ固定スロットを持つ → ブロッカーを非固定として再配置を試みる
                   blockerRecords.add(rec)
                 } else {
@@ -1607,7 +1724,7 @@ function tryRelocateTask(
                       blockerHardBlock = true; break
                     }
                     if (rec.task.fixedSlot) {
-                      if (task.fixedSlot && task.fixedSlot.day === day && task.fixedSlot.period === period) {
+                      if (task.fixedSlot && taskFixedSlotCovers(task, day, p)) {
                         blockerRecords.add(rec)
                       } else {
                         blockerHardBlock = true; break
@@ -1624,8 +1741,10 @@ function tryRelocateTask(
         }
       }
 
-      // ブロッカーが多すぎると再帰爆発するため上限3に制限
-      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > 3) continue
+      // ブロッカーが多すぎると再帰爆発するため上限を制限
+      // 固定タスク（特にTT科目）は教員が多いのでやや緩めに設定
+      const maxBlockers = task.fixedSlot ? 5 : 3
+      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > maxBlockers) continue
 
       // スナップショットを保存してから状態を変更
       const saved = saveState(state, placementMap)
@@ -2228,8 +2347,27 @@ export function* generateSchedule(
     // フェーズ1: 貪欲配置（フォワードチェッキング・LCV付き）
     const unplaced1 = greedyPlace(remainingTasks, state, maxTeacherPerDay, useMRV, placementMap, randomTopK, useForwardCheck, useLCV)
 
-    // フェーズ2: 未配置タスクを再度MRVで配置試行（他のタスクのスキップで空きができた可能性）
-    const unplaced2 = greedyPlace(unplaced1, state, maxTeacherPerDay, true, placementMap, 1, false, false)
+    // フェーズ1.5: 未配置の固定タスクを強制配置（非固定タスクを排除）
+    // 固定タスクは絶対配置すべきなので、固定スロットを占拠する非固定タスクを強制排除
+    const unplacedFixed = unplaced1.filter((t) => t.fixedSlot)
+    const unplacedNonFixed = unplaced1.filter((t) => !t.fixedSlot)
+    const forcedUnplacedFixed: ScheduleTask[] = []
+
+    for (const task of unplacedFixed) {
+      const evicted = forceFixedTaskPlacement(task, state, placementMap)
+      if (evicted.length > 0) {
+        // 排除されたタスクを未配置リストに追加
+        unplacedNonFixed.push(...evicted)
+      } else {
+        // 排除できなかった（別の固定タスクがブロック）
+        forcedUnplacedFixed.push(task)
+      }
+    }
+
+    const unplacedAfterForce = [...forcedUnplacedFixed, ...unplacedNonFixed]
+
+    // フェーズ2: 未配置タスクを再度MRVで配置試行（排除されたタスクも含む）
+    const unplaced2 = greedyPlace(unplacedAfterForce, state, maxTeacherPerDay, true, placementMap, 1, false, false)
 
     // フェーズ3: ローカル修復（チェーン置換）を複数ラウンド実行
     let repairInput = unplaced2

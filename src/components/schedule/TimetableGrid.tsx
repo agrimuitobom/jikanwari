@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { DayOfWeek, Period, ScheduleEntry, Teacher, Subject, Assignment } from '../../types'
 import { DAYS, DAY_LABELS, PERIODS } from '../../utils/constants'
 import { getClassLabel } from '../../utils/constants'
@@ -202,7 +202,10 @@ export function TimetableGrid({
   const [dragOverSlot, setDragOverSlot] = useState<string | null>(null)
   const [dropErrors, setDropErrors] = useState<Map<string, string>>(new Map())
 
-  const cellMap = buildCellMap(entries, assignments, subjects, teachers, viewMode, targetId)
+  const cellMap = useMemo(
+    () => buildCellMap(entries, assignments, subjects, teachers, viewMode, targetId),
+    [entries, assignments, subjects, teachers, viewMode, targetId],
+  )
 
   const handleDragStart = useCallback((e: React.DragEvent, entryId: string) => {
     e.dataTransfer.setData('text/entry-id', entryId)
