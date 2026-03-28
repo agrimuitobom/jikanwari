@@ -1259,10 +1259,8 @@ function preReserveFixedSlots(
         placementMap.set(cellKey(e.day, e.period, e.classId), record)
       }
     } else {
-      // チェーン置換で固定スロットのブロッカーを排除（深度5）
-      const teacherCount = getAllTeachersFlat(task).length
-      const depth = Math.max(4, Math.min(6, teacherCount))
-      if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, depth, new Set())) {
+      // チェーン置換で固定スロットのブロッカーを排除（深度3に制限）
+      if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, 3, new Set())) {
         // チェーン置換成功
       } else {
         unplaced.push(task)
@@ -1473,14 +1471,9 @@ function repairPhase(
   const stillUnplaced: ScheduleTask[] = []
 
   for (const task of unplacedTasks) {
-    // チェーン置換の深度を全体的に増加:
-    // - 通常タスク: 2 → 4（より深い玉突き移動を許可）
-    // - 複雑なタスク: 最大8（TT教員多数・同時開講）
-    const teacherCount = getAllTeachersFlat(task).length
-    const isComplex = task.fixedSlot || task.simultaneousGroupId || teacherCount >= 4
-    const depth = isComplex
-      ? Math.max(5, Math.min(8, teacherCount >= 4 ? teacherCount + 2 : 5))
-      : 4
+    // チェーン置換の深度（パフォーマンス重視で制限）
+    // 深すぎる再帰は指数爆発するため、最大3に制限
+    const depth = task.simultaneousGroupId ? 3 : 2
     if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, depth, new Set())) {
       // 修復成功
     } else {
@@ -1501,7 +1494,10 @@ function repairPhase(
  *
  * @param maxDepth - 残り置換深度（0=直接配置のみ）
  * @param excludedTasks - 置換対象外のタスク（循環防止）
+ * @param attempts - 試行カウンタ（参照渡しで共有し、上限に達したら打ち切り）
  */
+const MAX_RELOCATE_ATTEMPTS = 50
+
 function tryRelocateTask(
   task: ScheduleTask,
   state: BoardState,
@@ -1510,6 +1506,7 @@ function tryRelocateTask(
   placementMap: Map<string, PlacementRecord>,
   maxDepth: number,
   excludedTasks: Set<ScheduleTask>,
+  attempts: { count: number } = { count: 0 },
 ): boolean {
   // 直接配置を試みる（スナップショット不要）
   const candidates = getCandidateSlots(task, state)
@@ -1527,8 +1524,9 @@ function tryRelocateTask(
     return true
   }
 
-  // 深度0なら直接配置のみ
+  // 深度0 or 試行回数超過なら打ち切り
   if (maxDepth <= 0) return false
+  if (attempts.count >= MAX_RELOCATE_ATTEMPTS) return false
 
   // 固定スロットタスクは指定スロットのみでチェーン置換を試みる
   // （別の曜日・時限に配置されるのを防ぐ）
@@ -1539,6 +1537,9 @@ function tryRelocateTask(
 
   for (const day of days) {
     for (const period of periods) {
+      attempts.count++
+      if (attempts.count >= MAX_RELOCATE_ATTEMPTS) return false
+
       const checkPeriods: Period[] = task.isConsecutive
         ? [period, (period + 1) as Period]
         : [period]
@@ -1623,10 +1624,8 @@ function tryRelocateTask(
         }
       }
 
-      // TT科目（教員数が多い）の場合はブロッカー上限を拡大
-      const allTeachersCount = getAllTeachersFlat(task).length
-      const maxBlockers = Math.max(3, allTeachersCount + task.assignments.length)
-      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > maxBlockers) continue
+      // ブロッカーが多すぎると再帰爆発するため上限3に制限
+      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > 3) continue
 
       // スナップショットを保存してから状態を変更
       const saved = saveState(state, placementMap)
@@ -1666,7 +1665,7 @@ function tryRelocateTask(
           if (originalFixedSlot) {
             rec.task.fixedSlot = undefined
           }
-          const relocated = tryRelocateTask(rec.task, state, assignmentMap, maxTeacherPerDay, placementMap, maxDepth - 1, newExcluded)
+          const relocated = tryRelocateTask(rec.task, state, assignmentMap, maxTeacherPerDay, placementMap, maxDepth - 1, newExcluded, attempts)
           if (!relocated) {
             // 復元: fixedSlotを元に戻す
             if (originalFixedSlot) {
@@ -2098,9 +2097,9 @@ export function* generateSchedule(
     tasksByClass.get(classId)!.push(task)
   }
 
-  // 全体の時間制限（30秒）
+  // 全体の時間制限（15秒）- 多くのパスを素早く回す方が解の質が上がる
   const schedulerStartTime = Date.now()
-  const MAX_SCHEDULER_MS = 30_000
+  const MAX_SCHEDULER_MS = 15_000
 
   for (let pass = 0; pass < totalPasses; pass++) {
     // 完全解が見つかっていれば終了
@@ -2233,9 +2232,8 @@ export function* generateSchedule(
     const unplaced2 = greedyPlace(unplaced1, state, maxTeacherPerDay, true, placementMap, 1, false, false)
 
     // フェーズ3: ローカル修復（チェーン置換）を複数ラウンド実行
-    // 修復ラウンド数も増加: 5 → 8（より粘り強く修復を試みる）
     let repairInput = unplaced2
-    const MAX_REPAIR_ROUNDS = 8
+    const MAX_REPAIR_ROUNDS = 3
     for (let round = 0; round < MAX_REPAIR_ROUNDS && repairInput.length > 0; round++) {
       const result = repairPhase(repairInput, state, assignmentMap, maxTeacherPerDay, placementMap)
       if (result.length === repairInput.length) break // 改善なし → 打ち切り
