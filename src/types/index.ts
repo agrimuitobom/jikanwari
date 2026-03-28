@@ -137,6 +137,33 @@ export interface Subject {
 }
 
 // ============================================================
+// Room（教室・施設）
+// ============================================================
+
+/**
+ * 教室・施設エンティティ。
+ * 農業実習室、調理室、農場、体育館など施設制約を管理する。
+ *
+ * - 同じ時間帯に1つの施設を複数の授業が使用できない（ハード制約）
+ * - 施設にも利用可能な曜日・時限の制約がありうる
+ */
+export interface Room {
+  id: string
+  /** 施設名（例: "第1農場", "調理実習室", "PC教室"） */
+  name: string
+  /** 施設の種別（絞り込み用） */
+  category?: string
+  /** 利用可能な曜日（未設定の場合は全曜日利用可能） */
+  availableDays?: DayOfWeek[]
+  /** 利用不可の特定コマ */
+  excludedSlots?: TimeSlot[]
+  /** メモ・備考 */
+  memo?: string
+  createdAt: Date
+  updatedAt: Date
+}
+
+// ============================================================
 // Class（クラス）
 // ============================================================
 
@@ -190,6 +217,12 @@ export interface Assignment {
    */
   weeklyCount: number
   /**
+   * 使用教室・施設ID。
+   * 指定された場合、スケジューラは施設の重複を回避する（ハード制約）。
+   * 未設定（undefined）の場合は施設制約なし。
+   */
+  roomId?: string
+  /**
    * 同時開講グループID。
    * 同じグループIDを持つ割当は、時間割上で同じ曜日・同じ時限に配置される。
    *
@@ -199,6 +232,20 @@ export interface Assignment {
    * 未設定（undefined）の場合は通常の個別配置。
    */
   simultaneousGroupId?: string
+  /**
+   * 講座グループID（選択科目のグループ管理用）。
+   * 同じ講座グループIDを持つ割当は、同じ時間帯に配置される。
+   * simultaneousGroupIdと似ているが、こちらはクラスを横断した
+   * 選択科目（進学コース英語、就職コース農業実習など）のグループ化に使用する。
+   *
+   * simultaneousGroupIdとの違い:
+   * - simultaneousGroupId: 同じ科目を複数クラスで同時実施（教員共有可能）
+   * - courseGroupId: 異なる科目を同じ時間帯に配置（クラス内で生徒が分かれる）
+   *
+   * 例: 3年1組の進学英語と3年1組の農業実習を同時間帯に配置
+   *     → 進学希望者は英語、就職希望者は農業実習を受講
+   */
+  courseGroupId?: string
   /**
    * 固定時間スロット。
    * 指定された曜日・時限に必ず配置される（スケジューラが自動配置しない）。
@@ -273,6 +320,7 @@ export const COLLECTION = {
   SUBJECTS: 'subjects',
   CLASSES: 'classes',
   ASSIGNMENTS: 'assignments',
+  ROOMS: 'rooms',
   SCHEDULES: 'schedules',
   SCHEDULE_ENTRIES: 'scheduleEntries',
 } as const

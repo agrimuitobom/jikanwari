@@ -1,4 +1,4 @@
-import type { Teacher, Subject, Assignment, DayOfWeek, Period } from '../types'
+import type { Teacher, Subject, Assignment, Room, DayOfWeek, Period } from '../types'
 import { DAYS, PERIODS, DAY_LABELS, getClassLabel } from './constants'
 
 /** constraintChecker用のクラスラベル取得（getClassLabelを利用） */
@@ -31,10 +31,12 @@ export function detectConstraintConflicts(
   teachers: Teacher[],
   subjects: Subject[],
   assignments: Assignment[],
+  rooms?: Room[],
 ): ConstraintWarning[] {
   const warnings: ConstraintWarning[] = []
   const teacherMap = new Map(teachers.map((t) => [t.id, t]))
   const subjectMap = new Map(subjects.map((s) => [s.id, s]))
+  const roomMap = new Map((rooms ?? []).map((r) => [r.id, r]))
 
   for (const assignment of assignments) {
     const subject = subjectMap.get(assignment.subjectId)
@@ -314,16 +316,109 @@ export function detectConstraintConflicts(
     }
   }
 
+  // 施設（教室）の利用可能性チェック
+  for (const assignment of assignments) {
+    if (!assignment.roomId) continue
+    const room = roomMap.get(assignment.roomId)
+    if (!room) {
+      warnings.push({
+        severity: 'error',
+        assignmentId: assignment.id,
+        message: '指定された施設データが見つかりません',
+      })
+      continue
+    }
+
+    const subject = subjectMap.get(assignment.subjectId)
+    if (!subject) continue
+
+    const assignTeachers = assignment.teacherIds
+      .map((id) => teacherMap.get(id))
+      .filter((t): t is Teacher => t !== undefined)
+
+    // 施設の利用可能曜日と教員の勤務可能日の共通日をチェック
+    if (room.availableDays && room.availableDays.length > 0) {
+      const commonDays = DAYS.filter((day) =>
+        room.availableDays!.includes(day) &&
+        assignTeachers.every((t) => t.availableDays.includes(day)),
+      )
+      if (commonDays.length === 0) {
+        warnings.push({
+          severity: 'error',
+          assignmentId: assignment.id,
+          message: `${room.name}の利用可能日と教員の勤務可能日に共通日がありません`,
+        })
+      }
+    }
+  }
+
+  // 講座グループの整合性チェック
+  const courseGroups = new Map<string, Assignment[]>()
+  for (const assignment of assignments) {
+    if (!assignment.courseGroupId) continue
+    const group = courseGroups.get(assignment.courseGroupId)
+    if (group) {
+      group.push(assignment)
+    } else {
+      courseGroups.set(assignment.courseGroupId, [assignment])
+    }
+  }
+
+  for (const [, groupAssignments] of courseGroups) {
+    // 週コマ数が一致しているかチェック
+    const weeklyCounts = new Set(groupAssignments.map((a) => a.weeklyCount))
+    if (weeklyCounts.size > 1) {
+      const counts = groupAssignments.map((a) => {
+        const s = subjectMap.get(a.subjectId)
+        return `${getClassLabelForChecker(a.classId)} ${s?.name ?? ''}=${a.weeklyCount}コマ`
+      }).join('、')
+      for (const a of groupAssignments) {
+        warnings.push({
+          severity: 'error',
+          assignmentId: a.id,
+          message: `講座グループ内で週コマ数が一致しません（${counts}）`,
+        })
+      }
+    }
+
+    // 全教員の共通勤務日を確認
+    const allTeacherIds = new Set(groupAssignments.flatMap((a) => a.teacherIds))
+    const allGroupTeachers = Array.from(allTeacherIds)
+      .map((id) => teacherMap.get(id))
+      .filter((t): t is Teacher => t !== undefined)
+
+    if (allGroupTeachers.length > 0) {
+      const commonDaysForGroup = DAYS.filter((day) =>
+        allGroupTeachers.every((t) => t.availableDays.includes(day)),
+      )
+      if (commonDaysForGroup.length === 0) {
+        const names = allGroupTeachers.map((t) => t.name).join('・')
+        for (const a of groupAssignments) {
+          warnings.push({
+            severity: 'error',
+            assignmentId: a.id,
+            message: `講座グループの全教員（${names}）に共通の勤務可能日がありません`,
+          })
+        }
+      }
+    }
+  }
+
   // 同一教員の総コマ数チェック
   // 同時開講グループの場合、同じ時間に全クラスを同時に教えるため、
   // グループ全体でweeklyCount1回分のみカウントする
   const teacherTotalSlots = new Map<string, number>()
 
-  // 同時開講グループに属する割当IDを収集
-  const simultaneousAssignmentIds = new Set<string>()
+  // 同時開講グループ・講座グループに属する割当IDを収集
+  const groupedAssignmentIds = new Set<string>()
   for (const [, groupAssignments] of simultaneousGroups) {
     for (const a of groupAssignments) {
-      simultaneousAssignmentIds.add(a.id)
+      groupedAssignmentIds.add(a.id)
+    }
+  }
+  for (const [, groupAssignments] of courseGroups) {
+    for (const a of groupAssignments) {
+      groupedAssignmentIds.add(a.id)
     }
   }
 
@@ -349,9 +444,28 @@ export function detectConstraintConflicts(
     }
   }
 
-  // 同時開講グループに属さない割当は従来通り加算
+  // 講座グループも同様に1グループ1回だけ加算
+  for (const [groupId, groupAssignments] of courseGroups) {
+    const maxWeeklyCount = Math.max(...groupAssignments.map((a) => a.weeklyCount))
+    const allTeacherIds = new Set(groupAssignments.flatMap((a) => a.teacherIds))
+
+    for (const teacherId of allTeacherIds) {
+      if (!teacherGroupCounted.has(teacherId)) {
+        teacherGroupCounted.set(teacherId, new Set())
+      }
+      if (!teacherGroupCounted.get(teacherId)!.has(groupId)) {
+        teacherGroupCounted.get(teacherId)!.add(groupId)
+        teacherTotalSlots.set(
+          teacherId,
+          (teacherTotalSlots.get(teacherId) ?? 0) + maxWeeklyCount,
+        )
+      }
+    }
+  }
+
+  // グループに属さない割当は従来通り加算
   for (const assignment of assignments) {
-    if (simultaneousAssignmentIds.has(assignment.id)) continue
+    if (groupedAssignmentIds.has(assignment.id)) continue
     for (const teacherId of assignment.teacherIds) {
       teacherTotalSlots.set(
         teacherId,
