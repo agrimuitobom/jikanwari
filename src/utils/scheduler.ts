@@ -1259,8 +1259,8 @@ function preReserveFixedSlots(
         placementMap.set(cellKey(e.day, e.period, e.classId), record)
       }
     } else {
-      // チェーン置換で固定スロットのブロッカーを排除（深度3に制限）
-      if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, 3, new Set())) {
+      // 固定タスクは少数なので深度・試行回数を十分に確保（深度5, 試行200）
+      if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, 5, new Set(), { count: 0 })) {
         // チェーン置換成功
       } else {
         unplaced.push(task)
@@ -1485,6 +1485,19 @@ function repairPhase(
 }
 
 /**
+ * 固定タスクがその固定スロットで指定の曜日・時限をカバーするかチェック。
+ * 連続ペアの場合、fixedSlot.period と fixedSlot.period+1 の両方がカバー範囲。
+ */
+function taskFixedSlotCovers(task: ScheduleTask, day: DayOfWeek, period: Period): boolean {
+  if (!task.fixedSlot) return false
+  if (task.fixedSlot.day !== day) return false
+  if (task.fixedSlot.period === period) return true
+  // 連続ペアの場合、fixedSlot.period+1 もカバー
+  if (task.isConsecutive && (task.fixedSlot.period + 1) === period) return true
+  return false
+}
+
+/**
  * タスクの配置先を探す（再帰的チェーン置換対応）。
  * 1. 直接配置可能ならそこに配置
  * 2. 各スロットでブロッカーを移動（maxDepth段階まで玉突き）して空きを作る
@@ -1496,7 +1509,7 @@ function repairPhase(
  * @param excludedTasks - 置換対象外のタスク（循環防止）
  * @param attempts - 試行カウンタ（参照渡しで共有し、上限に達したら打ち切り）
  */
-const MAX_RELOCATE_ATTEMPTS = 50
+const MAX_RELOCATE_ATTEMPTS = 100
 
 function tryRelocateTask(
   task: ScheduleTask,
@@ -1524,8 +1537,9 @@ function tryRelocateTask(
     return true
   }
 
-  // 深度0 or 試行回数超過なら打ち切り
+  // 深度0なら打ち切り
   if (maxDepth <= 0) return false
+  // 試行回数超過なら打ち切り（固定タスクの初回呼び出しはcountが小さいので問題なし）
   if (attempts.count >= MAX_RELOCATE_ATTEMPTS) return false
 
   // 固定スロットタスクは指定スロットのみでチェーン置換を試みる
@@ -1583,7 +1597,7 @@ function tryRelocateTask(
               // 固定スロットのブロッカー: 自タスクも同じスロットに固定されている場合は
               // ブロッカーの固定を解除して再配置を試みる（より制約の厳しいタスクを優先）
               if (rec.task.fixedSlot) {
-                if (task.fixedSlot && task.fixedSlot.day === day && task.fixedSlot.period === period) {
+                if (task.fixedSlot && taskFixedSlotCovers(task, day, p)) {
                   // 自タスクが同じ固定スロットを持つ → ブロッカーを非固定として再配置を試みる
                   blockerRecords.add(rec)
                 } else {
@@ -1607,7 +1621,7 @@ function tryRelocateTask(
                       blockerHardBlock = true; break
                     }
                     if (rec.task.fixedSlot) {
-                      if (task.fixedSlot && task.fixedSlot.day === day && task.fixedSlot.period === period) {
+                      if (task.fixedSlot && taskFixedSlotCovers(task, day, p)) {
                         blockerRecords.add(rec)
                       } else {
                         blockerHardBlock = true; break
@@ -1624,8 +1638,10 @@ function tryRelocateTask(
         }
       }
 
-      // ブロッカーが多すぎると再帰爆発するため上限3に制限
-      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > 3) continue
+      // ブロッカーが多すぎると再帰爆発するため上限を制限
+      // 固定タスク（特にTT科目）は教員が多いのでやや緩めに設定
+      const maxBlockers = task.fixedSlot ? 5 : 3
+      if (blockerHardBlock || blockerRecords.size === 0 || blockerRecords.size > maxBlockers) continue
 
       // スナップショットを保存してから状態を変更
       const saved = saveState(state, placementMap)
