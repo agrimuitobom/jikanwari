@@ -735,6 +735,63 @@ describe('scheduler', () => {
       expect(result.unplacedTasks.length).toBe(0)
     })
 
+    it('連続2コマの固定スロットで後半時限(6限)だけが登録されている場合も開始時限に正規化される', () => {
+      // バグ再現: fixedSlots=[{火,6}]のみ → 連続ペアは5-6限に正規化されるべき
+      const t = makeTeacher({ name: '教員1' })
+      const subject = makeSubject({
+        name: '課題研究S',
+        grade: 3,
+        category: '農業',
+        credits: 2,
+        weeklyFrequency: 2,
+        consecutivePairs: 1,
+      })
+      const a = makeAssignment({
+        classId: 'grade3-class1',
+        subjectId: subject.id,
+        teacherIds: [t.id],
+        weeklyCount: 2,
+        fixedSlots: [{ day: 'tuesday' as DayOfWeek, period: 6 as Period }],
+      })
+      const result = runGenerator([t], [subject], [a])
+      expect(result.isComplete).toBe(true)
+      const entries = result.entries.filter((e) => e.assignmentId === a.id)
+      expect(entries.length).toBe(2)
+      for (const entry of entries) {
+        expect(entry.day).toBe('tuesday')
+        expect([5, 6]).toContain(entry.period)
+      }
+    })
+
+    it('連続2コマの固定スロットが逆順[{6},{5}]で登録されていても正しく配置される', () => {
+      const t = makeTeacher({ name: '教員1' })
+      const subject = makeSubject({
+        name: '課題研究E',
+        grade: 3,
+        credits: 2,
+        weeklyFrequency: 2,
+        consecutivePairs: 1,
+      })
+      const a = makeAssignment({
+        classId: 'grade3-class2',
+        subjectId: subject.id,
+        teacherIds: [t.id],
+        weeklyCount: 2,
+        fixedSlots: [
+          { day: 'tuesday' as DayOfWeek, period: 6 as Period },
+          { day: 'tuesday' as DayOfWeek, period: 5 as Period },
+        ],
+      })
+      const result = runGenerator([t], [subject], [a])
+      expect(result.isComplete).toBe(true)
+      const entries = result.entries.filter((e) => e.assignmentId === a.id)
+      expect(entries.length).toBe(2)
+      for (const entry of entries) {
+        expect(entry.day).toBe('tuesday')
+        expect([5, 6]).toContain(entry.period)
+      }
+    })
+
     it('固定スロットのタスクが修復フェーズで別の場所に移動されない', () => {
       // 多くの割当で競合が発生する状況を作り、固定タスクが別の場所に行かないことを確認
       const teachers = Array.from({ length: 3 }, (_, i) => makeTeacher({ name: `教員${i + 1}` }))
