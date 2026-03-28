@@ -628,6 +628,64 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
   return score
 }
 
+/**
+ * LCV（最小制約値）ヒューリスティック付きスロットスコアリング。
+ * 他の未配置タスクへの影響を考慮し、選択肢を最も残すスロットを優先する。
+ */
+function scoreCandidateSlotWithLCV(
+  task: ScheduleTask,
+  slot: Slot,
+  state: BoardState,
+  maxTeacherPerDay: number,
+  otherTasks: ScheduleTask[],
+): number {
+  // 基本スコア
+  let score = scoreCandidateSlot(task, slot, state, maxTeacherPerDay)
+
+  // LCV: このスロットに配置した場合、他タスクの候補数への影響を推定
+  // 全タスクを検査するとO(n^2)になるため、影響を受けうるタスクのみチェック
+  for (const otherTask of otherTasks) {
+    if (otherTask === task) continue
+
+    let affected = false
+    for (let i = 0; i < otherTask.assignments.length && !affected; i++) {
+      const otherAssignment = otherTask.assignments[i]
+      const otherTeachers = otherTask.teacherGroups[i]
+
+      // このスロットに配置すると、同じクラスの他タスクの候補が減る
+      if (otherAssignment.classId === task.assignments[0]?.classId) {
+        affected = true
+      }
+      // 共通教員がいる場合も候補が減る
+      if (!affected) {
+        for (const ot of otherTeachers) {
+          for (const tg of task.teacherGroups) {
+            if (tg.some((t) => t.id === ot.id)) {
+              affected = true
+              break
+            }
+          }
+          if (affected) break
+        }
+      }
+    }
+
+    if (affected) {
+      // 影響を受けるタスクの現在の候補数を簡易推定
+      // 候補が少ないタスクを潰すほどペナルティが大きい
+      const otherCandidates = getCandidateSlots(otherTask, state)
+      if (otherCandidates.length <= 2) {
+        // 候補が非常に少ないタスクへの影響は大きなペナルティ
+        score -= 25
+      } else if (otherCandidates.length <= 5) {
+        score -= 8
+      }
+    }
+  }
+
+  return score
+}
+
 // ============================================================
 // MRV（最小残余値）ヒューリスティック
 // ============================================================
@@ -832,6 +890,30 @@ function calculateScore(
   }
   score -= Math.min(overload * 20, 100)
 
+  // ソフト制約ペナルティ: spreadDays違反（最大 -50点）
+  // 隣接曜日に同科目が配置されている場合に減点
+  let spreadViolations = 0
+  const classDaySubjects = new Map<string, Set<string>>()
+  for (const entry of entries) {
+    if (entry.isConsecutiveSecond) continue
+    const assignment = assignmentMap.get(entry.assignmentId)
+    if (!assignment) continue
+    const subject = subjectMap.get(assignment.subjectId)
+    if (!subject?.spreadDays) continue
+    const key = `${entry.classId}:${subject.id}`
+    if (!classDaySubjects.has(key)) classDaySubjects.set(key, new Set())
+    classDaySubjects.get(key)!.add(entry.day)
+  }
+  for (const days of classDaySubjects.values()) {
+    const dayIndices = [...days].map((d) => DAYS.indexOf(d as DayOfWeek)).sort((a, b) => a - b)
+    for (let i = 1; i < dayIndices.length; i++) {
+      if (dayIndices[i] - dayIndices[i - 1] === 1) {
+        spreadViolations++
+      }
+    }
+  }
+  score -= Math.min(spreadViolations * 10, 50)
+
   return Math.round(score)
 }
 
@@ -1028,6 +1110,49 @@ function preReserveFixedSlots(
   return unplaced
 }
 
+/**
+ * フォワードチェッキング: 配置後に残りタスクのいずれかが候補0になっていないか検査。
+ * 候補0のタスクが見つかった場合は false を返す（この配置はデッドエンドに至る）。
+ * パフォーマンスのため、影響を受ける可能性のあるタスクのみ検査する。
+ */
+function forwardCheck(
+  placedTask: ScheduleTask,
+  _slot: Slot,
+  remainingTasks: ScheduleTask[],
+  state: BoardState,
+): boolean {
+  // 影響を受ける可能性のあるタスクのみチェック（同クラス or 共通教員）
+  const placedClassIds = new Set(placedTask.assignments.map((a) => a.classId))
+  const placedTeacherIds = new Set<string>()
+  for (const tg of placedTask.teacherGroups) {
+    for (const t of tg) placedTeacherIds.add(t.id)
+  }
+
+  for (const other of remainingTasks) {
+    let couldBeAffected = false
+    for (const a of other.assignments) {
+      if (placedClassIds.has(a.classId)) { couldBeAffected = true; break }
+    }
+    if (!couldBeAffected) {
+      for (const tg of other.teacherGroups) {
+        for (const t of tg) {
+          if (placedTeacherIds.has(t.id)) { couldBeAffected = true; break }
+        }
+        if (couldBeAffected) break
+      }
+    }
+    if (!couldBeAffected) continue
+
+    // 影響を受ける可能性があるタスクの候補数をチェック
+    const otherCandidates = getCandidateSlots(other, state)
+    if (otherCandidates.length === 0) {
+      return false // デッドエンド検出
+    }
+  }
+
+  return true
+}
+
 function greedyPlace(
   tasks: ScheduleTask[],
   state: BoardState,
@@ -1035,6 +1160,8 @@ function greedyPlace(
   useMRV: boolean,
   placementMap: Map<string, PlacementRecord>,
   randomTopK: number = 1,
+  useForwardCheck: boolean = false,
+  useLCV: boolean = false,
 ): ScheduleTask[] {
   const unplaced: ScheduleTask[] = []
 
@@ -1045,17 +1172,57 @@ function greedyPlace(
       const task = remaining.splice(index, 1)[0]
 
       if (candidates.length > 0) {
-        // スコア順にソートし、上位からランダムに選択
-        candidates.sort((a, b) =>
-          scoreCandidateSlot(task, b, state, maxTeacherPerDay) -
-          scoreCandidateSlot(task, a, state, maxTeacherPerDay)
-        )
-        const topN = Math.min(candidates.length, randomTopK)
-        const chosen = candidates[Math.floor(Math.random() * topN)]
-        const entries = placeTask(task, state, chosen.day, chosen.period)
-        const record: PlacementRecord = { task, entries, day: chosen.day, startPeriod: chosen.period }
-        for (const e of entries) {
-          placementMap.set(cellKey(e.day, e.period, e.classId), record)
+        // LCV使用時は他タスクへの影響を考慮したスコアリング
+        if (useLCV && remaining.length > 0) {
+          candidates.sort((a, b) =>
+            scoreCandidateSlotWithLCV(task, b, state, maxTeacherPerDay, remaining) -
+            scoreCandidateSlotWithLCV(task, a, state, maxTeacherPerDay, remaining)
+          )
+        } else {
+          candidates.sort((a, b) =>
+            scoreCandidateSlot(task, b, state, maxTeacherPerDay) -
+            scoreCandidateSlot(task, a, state, maxTeacherPerDay)
+          )
+        }
+
+        // フォワードチェッキング: 上位候補を順に試し、デッドエンドを回避
+        let placed = false
+        const topN = Math.min(candidates.length, useForwardCheck ? Math.max(randomTopK, 5) : randomTopK)
+
+        if (useForwardCheck && remaining.length > 0) {
+          for (let ci = 0; ci < topN; ci++) {
+            const candidate = candidates[ci]
+            const entries = placeTask(task, state, candidate.day, candidate.period)
+            if (forwardCheck(task, candidate, remaining, state)) {
+              const record: PlacementRecord = { task, entries, day: candidate.day, startPeriod: candidate.period }
+              for (const e of entries) {
+                placementMap.set(cellKey(e.day, e.period, e.classId), record)
+              }
+              placed = true
+              break
+            } else {
+              // デッドエンド: この配置を撤回して次の候補を試す
+              removeEntries(task, state, entries)
+            }
+          }
+          if (!placed) {
+            // フォワードチェッキングで全候補がデッドエンドだった場合、
+            // ベストスコアのスロットに配置（完全な失敗よりマシ）
+            const best = candidates[0]
+            const entries = placeTask(task, state, best.day, best.period)
+            const record: PlacementRecord = { task, entries, day: best.day, startPeriod: best.period }
+            for (const e of entries) {
+              placementMap.set(cellKey(e.day, e.period, e.classId), record)
+            }
+          }
+        } else {
+          const choiceN = Math.min(candidates.length, randomTopK)
+          const chosen = candidates[Math.floor(Math.random() * choiceN)]
+          const entries = placeTask(task, state, chosen.day, chosen.period)
+          const record: PlacementRecord = { task, entries, day: chosen.day, startPeriod: chosen.period }
+          for (const e of entries) {
+            placementMap.set(cellKey(e.day, e.period, e.classId), record)
+          }
         }
       } else {
         unplaced.push(task)
@@ -1137,12 +1304,14 @@ function repairPhase(
   const stillUnplaced: ScheduleTask[] = []
 
   for (const task of unplacedTasks) {
-    // TT科目（教員数が多い）・同時開講・固定スロットはより深いチェーン置換を許可
+    // チェーン置換の深度を全体的に増加:
+    // - 通常タスク: 2 → 4（より深い玉突き移動を許可）
+    // - 複雑なタスク: 最大8（TT教員多数・同時開講）
     const teacherCount = getAllTeachersFlat(task).length
     const isComplex = task.fixedSlot || task.simultaneousGroupId || teacherCount >= 4
     const depth = isComplex
-      ? Math.max(3, Math.min(5, teacherCount >= 4 ? teacherCount - 1 : 3))
-      : 2
+      ? Math.max(5, Math.min(8, teacherCount >= 4 ? teacherCount + 2 : 5))
+      : 4
     if (tryRelocateTask(task, state, assignmentMap, maxTeacherPerDay, placementMap, depth, new Set())) {
       // 修復成功
     } else {
@@ -1690,6 +1859,43 @@ export function* generateSchedule(
   // 前パスで未配置だったタスクを追跡（優先リスタート用）
   let previousUnplacedTasks: ScheduleTask[] = []
 
+  // 実際のスロット数に基づくタスク優先度を事前計算
+  // （静的な優先度だけでなく、実際の利用可能スロット数も考慮）
+  const taskAvailability = new Map<ScheduleTask, number>()
+  {
+    const tempState = createEmptyState()
+    if (lockedEntries.length > 0) {
+      prePlaceLockedEntries(lockedEntries, tempState, assignmentMap, subjectMap, teacherMap)
+    }
+    for (const task of allTasks) {
+      if (task.fixedSlot) {
+        taskAvailability.set(task, 1) // 固定タスクは候補1
+      } else {
+        const candidates = getCandidateSlots(task, tempState)
+        taskAvailability.set(task, candidates.length)
+      }
+    }
+  }
+
+  // 実際のスロット数に基づいて全タスクの優先度を補正
+  for (const task of allTasks) {
+    const avail = taskAvailability.get(task) ?? 30
+    if (avail <= 3) {
+      task.priority -= 50 // 候補が非常に少ないタスクを最優先
+    } else if (avail <= 8) {
+      task.priority -= 20
+    }
+  }
+  allTasks.sort((a, b) => a.priority - b.priority)
+
+  // クラスごとのタスク分類（クラスベース順序戦略用）
+  const tasksByClass = new Map<string, ScheduleTask[]>()
+  for (const task of nonFixedTasks) {
+    const classId = task.assignments[0]?.classId ?? ''
+    if (!tasksByClass.has(classId)) tasksByClass.set(classId, [])
+    tasksByClass.get(classId)!.push(task)
+  }
+
   for (let pass = 0; pass < totalPasses; pass++) {
     // 完全解が見つかっていれば終了
     if (bestResult.isComplete) break
@@ -1703,26 +1909,85 @@ export function* generateSchedule(
       prePlaceLockedEntries(lockedEntries, state, assignmentMap, subjectMap, teacherMap)
     }
 
-    // タスク順序の決定
+    // --- 多様なリスタート戦略 ---
     let tasks: ScheduleTask[]
+    const strategy = pass % 7 // 7種類の戦略をローテーション
+
     if (pass === 0) {
-      // 初回: 優先度順（制約が厳しいものから）
+      // 初回: 静的優先度順（制約が厳しいものから）
       tasks = [...allTasks]
-    } else if (pass % 3 === 1 && previousUnplacedTasks.length > 0) {
-      // 3パスに1回: 前パスの未配置タスクを最優先で配置し、残りをシャッフル
+    } else if (strategy === 1 && previousUnplacedTasks.length > 0) {
+      // 前パスの未配置タスクを最優先で配置し、残りをシャッフル
       const unplacedSet = new Set(previousUnplacedTasks)
       const otherNonFixed = nonFixedTasks.filter((t) => !unplacedSet.has(t))
       tasks = [...fixedTasks, ...previousUnplacedTasks, ...shuffleArray(otherNonFixed)]
+    } else if (strategy === 2) {
+      // クラスベース順序: クラスごとにまとめて配置（同クラス内での衝突を減らす）
+      const classIds = shuffleArray([...tasksByClass.keys()])
+      const classOrdered: ScheduleTask[] = []
+      for (const classId of classIds) {
+        const classTasks = tasksByClass.get(classId) ?? []
+        classOrdered.push(...shuffleArray(classTasks))
+      }
+      tasks = [...fixedTasks, ...classOrdered]
+    } else if (strategy === 3) {
+      // 逆優先度順: 通常とは逆に制約の緩いタスクから配置
+      // （厳しいタスク用の空きスロットをより確保する狙い）
+      const reversed = [...nonFixedTasks].sort((a, b) => b.priority - a.priority)
+      tasks = [...fixedTasks, ...reversed]
+    } else if (strategy === 4) {
+      // 実際の候補数順（動的MRV風）: 候補が少ないものから
+      const sorted = [...nonFixedTasks].sort((a, b) => {
+        const aAvail = taskAvailability.get(a) ?? 30
+        const bAvail = taskAvailability.get(b) ?? 30
+        return aAvail - bAvail
+      })
+      tasks = [...fixedTasks, ...sorted]
+    } else if (strategy === 5 && previousUnplacedTasks.length > 0) {
+      // 未配置タスクとその関連タスク（同教員・同クラス）を最優先
+      const unplacedSet = new Set(previousUnplacedTasks)
+      const relatedTeacherIds = new Set<string>()
+      const relatedClassIds = new Set<string>()
+      for (const t of previousUnplacedTasks) {
+        for (const a of t.assignments) relatedClassIds.add(a.classId)
+        for (const tg of t.teacherGroups) {
+          for (const teacher of tg) relatedTeacherIds.add(teacher.id)
+        }
+      }
+      const related: ScheduleTask[] = []
+      const other: ScheduleTask[] = []
+      for (const t of nonFixedTasks) {
+        if (unplacedSet.has(t)) continue
+        let isRelated = false
+        for (const a of t.assignments) {
+          if (relatedClassIds.has(a.classId)) { isRelated = true; break }
+        }
+        if (!isRelated) {
+          for (const tg of t.teacherGroups) {
+            for (const teacher of tg) {
+              if (relatedTeacherIds.has(teacher.id)) { isRelated = true; break }
+            }
+            if (isRelated) break
+          }
+        }
+        if (isRelated) related.push(t)
+        else other.push(t)
+      }
+      tasks = [...fixedTasks, ...previousUnplacedTasks, ...shuffleArray(related), ...shuffleArray(other)]
     } else {
-      // リスタート: 固定スロットを先頭に保ち、残りをシャッフル
+      // デフォルト: 固定スロットを先頭に保ち、残りをシャッフル
       tasks = [...fixedTasks, ...shuffleArray(nonFixedTasks)]
     }
 
     // ランダム性の制御: パスによって上位N件から選択
-    const randomTopK = pass === 0 ? 1 : (pass % 3 === 0 ? 1 : 3)
+    const randomTopK = pass === 0 ? 1 : (strategy === 0 ? 1 : 3)
 
     // MRV方式は2回目以降で使用（初回は優先度順で安定した解を得る）
     const useMRV = pass > 0
+
+    // フォワードチェッキングとLCVは一部のパスで使用（計算コスト考慮）
+    const useForwardCheck = pass > 0 && (strategy === 1 || strategy === 4 || strategy === 5)
+    const useLCV = pass > 0 && (strategy === 2 || strategy === 4)
 
     // フェーズ0: 固定スロットの事前確保（チェーン置換付き）
     // 固定タスクを制約の厳しい順に配置し、ブロッカーを積極的に排除する
@@ -1731,16 +1996,16 @@ export function* generateSchedule(
     const placedFixedSet = new Set(fixedTasks.filter((t) => !fixedUnplaced.includes(t)))
     const remainingTasks = tasks.filter((t) => !placedFixedSet.has(t))
 
-    // フェーズ1: 貪欲配置（固定で配置済みのタスクを除外）
-    const unplaced1 = greedyPlace(remainingTasks, state, maxTeacherPerDay, useMRV, placementMap, randomTopK)
+    // フェーズ1: 貪欲配置（フォワードチェッキング・LCV付き）
+    const unplaced1 = greedyPlace(remainingTasks, state, maxTeacherPerDay, useMRV, placementMap, randomTopK, useForwardCheck, useLCV)
 
     // フェーズ2: 未配置タスクを再度MRVで配置試行（他のタスクのスキップで空きができた可能性）
-    const unplaced2 = greedyPlace(unplaced1, state, maxTeacherPerDay, true, placementMap, 1)
+    const unplaced2 = greedyPlace(unplaced1, state, maxTeacherPerDay, true, placementMap, 1, false, false)
 
     // フェーズ3: ローカル修復（チェーン置換）を複数ラウンド実行
-    // 1回の修復成功で空きが連鎖的に増え、次のラウンドで別のタスクも配置可能になる
+    // 修復ラウンド数も増加: 5 → 8（より粘り強く修復を試みる）
     let repairInput = unplaced2
-    const MAX_REPAIR_ROUNDS = 5
+    const MAX_REPAIR_ROUNDS = 8
     for (let round = 0; round < MAX_REPAIR_ROUNDS && repairInput.length > 0; round++) {
       const result = repairPhase(repairInput, state, assignmentMap, maxTeacherPerDay, placementMap)
       if (result.length === repairInput.length) break // 改善なし → 打ち切り
