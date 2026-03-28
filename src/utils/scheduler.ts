@@ -763,6 +763,11 @@ function placeTask(
     ? [period, (period + 1) as Period]
     : [period]
 
+  // 同時開講グループで同じ教員が複数割当にまたがる場合、
+  // teacherGrid/teacherDayCountの重複登録を防ぐ。
+  // 実際は同じ時間に同時に教えるので、教員のコマ数は1回だけカウントする。
+  const teacherRegistered = new Set<string>() // "day:period:teacherId" で追跡
+
   for (let i = 0; i < task.assignments.length; i++) {
     const assignment = task.assignments[i]
     const subject = task.subjects[i]
@@ -785,10 +790,15 @@ function placeTask(
       // グリッドに登録
       state.classGrid.set(cellKey(day, p, classId), assignment.id)
       for (const teacher of teachers) {
-        state.teacherGrid.set(cellKey(day, p, teacher.id), assignment.id)
-        // 教員日別コマ数を加算
-        const tdKey = teacherDayKey(day, teacher.id)
-        state.teacherDayCount.set(tdKey, (state.teacherDayCount.get(tdKey) ?? 0) + 1)
+        const teacherCellKey = cellKey(day, p, teacher.id)
+        state.teacherGrid.set(teacherCellKey, assignment.id)
+
+        // 同時開講グループ内で同じ教員が既に登録済みなら、teacherDayCountは加算しない
+        if (!teacherRegistered.has(teacherCellKey)) {
+          teacherRegistered.add(teacherCellKey)
+          const tdKey = teacherDayKey(day, teacher.id)
+          state.teacherDayCount.set(tdKey, (state.teacherDayCount.get(tdKey) ?? 0) + 1)
+        }
       }
 
       // 同日同科目カウントを加算
@@ -814,6 +824,10 @@ function removeEntries(
   state: BoardState,
   entries: ScheduleEntry[],
 ): void {
+  // 同時開講グループで同じ教員が複数エントリにまたがる場合、
+  // teacherDayCountの重複減算を防ぐ
+  const teacherDeregistered = new Set<string>() // "day:period:teacherId" で追跡
+
   for (const entry of entries) {
     state.classGrid.delete(cellKey(entry.day, entry.period, entry.classId))
 
@@ -824,13 +838,18 @@ function removeEntries(
 
     for (const teacher of teachers) {
       state.teacherGrid.delete(cellKey(entry.day, entry.period, teacher.id))
-      // 教員日別コマ数を減算
-      const tdKey = teacherDayKey(entry.day, teacher.id)
-      const current = state.teacherDayCount.get(tdKey) ?? 0
-      if (current <= 1) {
-        state.teacherDayCount.delete(tdKey)
-      } else {
-        state.teacherDayCount.set(tdKey, current - 1)
+
+      // 同時開講グループ内で同じ教員が既に減算済みなら、teacherDayCountは減算しない
+      const teacherCellKey = cellKey(entry.day, entry.period, teacher.id)
+      if (!teacherDeregistered.has(teacherCellKey)) {
+        teacherDeregistered.add(teacherCellKey)
+        const tdKey = teacherDayKey(entry.day, teacher.id)
+        const current = state.teacherDayCount.get(tdKey) ?? 0
+        if (current <= 1) {
+          state.teacherDayCount.delete(tdKey)
+        } else {
+          state.teacherDayCount.set(tdKey, current - 1)
+        }
       }
     }
 

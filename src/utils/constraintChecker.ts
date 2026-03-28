@@ -315,8 +315,43 @@ export function detectConstraintConflicts(
   }
 
   // 同一教員の総コマ数チェック
+  // 同時開講グループの場合、同じ時間に全クラスを同時に教えるため、
+  // グループ全体でweeklyCount1回分のみカウントする
   const teacherTotalSlots = new Map<string, number>()
+
+  // 同時開講グループに属する割当IDを収集
+  const simultaneousAssignmentIds = new Set<string>()
+  for (const [, groupAssignments] of simultaneousGroups) {
+    for (const a of groupAssignments) {
+      simultaneousAssignmentIds.add(a.id)
+    }
+  }
+
+  // 同時開講グループの教員コマ数: グループ内で最大のweeklyCountを1回だけ加算
+  // （同じ教員が複数クラスに割り当てられていても、同時に実施するので実質1コマ）
+  const teacherGroupCounted = new Map<string, Set<string>>() // teacherId → Set<groupId>
+  for (const [groupId, groupAssignments] of simultaneousGroups) {
+    const maxWeeklyCount = Math.max(...groupAssignments.map((a) => a.weeklyCount))
+    const allTeacherIds = new Set(groupAssignments.flatMap((a) => a.teacherIds))
+
+    for (const teacherId of allTeacherIds) {
+      // このグループの教員コマ数を1回だけ加算
+      if (!teacherGroupCounted.has(teacherId)) {
+        teacherGroupCounted.set(teacherId, new Set())
+      }
+      if (!teacherGroupCounted.get(teacherId)!.has(groupId)) {
+        teacherGroupCounted.get(teacherId)!.add(groupId)
+        teacherTotalSlots.set(
+          teacherId,
+          (teacherTotalSlots.get(teacherId) ?? 0) + maxWeeklyCount,
+        )
+      }
+    }
+  }
+
+  // 同時開講グループに属さない割当は従来通り加算
   for (const assignment of assignments) {
+    if (simultaneousAssignmentIds.has(assignment.id)) continue
     for (const teacherId of assignment.teacherIds) {
       teacherTotalSlots.set(
         teacherId,
