@@ -255,6 +255,15 @@ export interface Assignment {
    * 未設定（undefined）の場合はスケジューラが自動配置。
    */
   fixedSlots?: TimeSlot[]
+  /**
+   * 固定曜日。
+   * 指定された曜日にのみ配置される（時限はスケジューラが自動決定）。
+   * fixedSlotsより緩い制約で、曜日だけを固定したい場合に使用。
+   *
+   * 例: weeklyCount=3, fixedDays=['monday','wednesday','friday']
+   *     → 月・水・金に1コマずつ配置（時限は自動）
+   */
+  fixedDays?: DayOfWeek[]
   /** 備考（特記事項など） */
   notes?: string
   createdAt: Date

@@ -63,3 +63,98 @@
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
   }
 }
+
+/* ============================================================
+ * 印刷用スタイル
+ * ============================================================ */
+@media print {
+  /* ページ設定 */
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+
+  /* 基本リセット */
+  body {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    background: white !important;
+  }
+
+  /* ヘッダー・ナビゲーション・サイドバーを非表示 */
+  header,
+  nav {
+    display: none !important;
+  }
+
+  /* mainの余白とmax-widthをリセット */
+  main {
+    padding: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+  }
+  main > div {
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* 印刷用タイトル */
+  .print-title {
+    display: block !important;
+    font-size: 16pt;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 8pt;
+    color: #111;
+  }
+  .print-subtitle {
+    display: block !important;
+    font-size: 9pt;
+    text-align: center;
+    margin-bottom: 12pt;
+    color: #666;
+  }
+
+  /* カードの装飾を除去 */
+  .card {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* 時間割テーブルを最適化 */
+  .timetable-print-area table {
+    width: 100% !important;
+    min-width: 0 !important;
+    font-size: 9pt;
+    border-collapse: collapse;
+  }
+  .timetable-print-area th,
+  .timetable-print-area td {
+    border: 1px solid #888 !important;
+    padding: 4pt 3pt !important;
+  }
+  .timetable-print-area th {
+    background-color: #f0f0f0 !important;
+  }
+  .timetable-print-area td {
+    height: auto !important;
+    min-height: 40pt;
+    vertical-align: top;
+  }
+  /* セル内の授業カード */
+  .timetable-print-area td > div {
+    margin: 1pt !important;
+    padding: 2pt 3pt !important;
+    border-radius: 2pt !important;
+    font-size: 8pt !important;
+    line-height: 1.3 !important;
+  }
+
+  /* overflow: autoを解除（印刷時にスクロール不要） */
+  .timetable-print-area {
+    overflow: visible !important;
+  }
+}

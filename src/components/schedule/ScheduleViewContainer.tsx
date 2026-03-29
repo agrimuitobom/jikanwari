@@ -397,12 +397,25 @@ export function ScheduleViewContainer({
   return (
     <div className="space-y-4">
       {schedulesError && (
-        <ErrorAlert message={schedulesError.message} onDismiss={clearSchedulesError} />
+        <div className="print:hidden">
+          <ErrorAlert message={schedulesError.message} onDismiss={clearSchedulesError} />
+        </div>
       )}
+
+      {/* 印刷用タイトル（画面では非表示） */}
+      <div className="print-title hidden">
+        {viewMode === 'class'
+          ? classOptions.find((c) => c.id === selectedTargetId)?.displayName ?? ''
+          : teachers.find((t) => t.id === selectedTargetId)?.name ?? ''}
+        {' '}時間割
+      </div>
+      <div className="print-subtitle hidden">
+        {new Date().toLocaleDateString('ja-JP')}
+      </div>
 
       {/* 制約矛盾の警告 */}
       {constraintWarnings.length > 0 && !warningsDismissed && (
-        <div className="card p-4 border-amber-200 bg-amber-50">
+        <div className="card p-4 border-amber-200 bg-amber-50 print:hidden">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-start gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5 text-amber-500 shrink-0 mt-0.5">
@@ -442,7 +455,7 @@ export function ScheduleViewContainer({
       )}
 
       {/* ツールバー */}
-      <div className="card p-3 sm:p-4">
+      <div className="card p-3 sm:p-4 print:hidden">
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {/* 自動生成ボタン */}
           <button
@@ -652,7 +665,7 @@ export function ScheduleViewContainer({
 
       {/* 保存済みスケジュール一覧（Firestore永続化） */}
       {schedules.length > 0 && (
-        <div className="card p-4">
+        <div className="card p-4 print:hidden">
           <div className="flex items-center gap-2 mb-3">
             <h3 className="text-sm font-semibold text-gray-700">保存済みの時間割案</h3>
             <span className="badge bg-gray-100 text-gray-600">{schedules.length}件</span>
@@ -759,20 +772,22 @@ export function ScheduleViewContainer({
 
       {/* スケジュール比較ビュー */}
       {compareSchedules && compareSchedules[0] && compareSchedules[1] && (
-        <ScheduleCompare
-          scheduleA={compareSchedules[0]}
-          scheduleB={compareSchedules[1]}
-          teachers={teachers}
-          subjects={subjects}
-          assignments={assignments}
-          classOptions={classOptions}
-          onClose={() => setCompareIds(null)}
-        />
+        <div className="print:hidden">
+          <ScheduleCompare
+            scheduleA={compareSchedules[0]}
+            scheduleB={compareSchedules[1]}
+            teachers={teachers}
+            subjects={subjects}
+            assignments={assignments}
+            classOptions={classOptions}
+            onClose={() => setCompareIds(null)}
+          />
+        </div>
       )}
 
       {/* データ不足メッセージ */}
       {!hasData && (
-        <div className="card flex flex-col items-center gap-3 py-16 text-gray-400">
+        <div className="card flex flex-col items-center gap-3 py-16 text-gray-400 print:hidden">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
@@ -797,7 +812,7 @@ export function ScheduleViewContainer({
       {entries.length > 0 && (
         <div className="flex flex-col lg:flex-row gap-4">
           {/* グリッド */}
-          <div className="flex-1 min-w-0 card p-2 sm:p-4 print:shadow-none print:border-none">
+          <div className="flex-1 min-w-0 card p-2 sm:p-4 print:shadow-none print:border-none timetable-print-area">
             <TimetableGrid
               key={`${viewMode}-${selectedTargetId}`}
               entries={entries}

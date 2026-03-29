@@ -945,5 +945,44 @@ describe('scheduler', () => {
         }
       }
     })
+
+    it('fixedDaysを指定すると、指定した曜日にのみ配置される', () => {
+      const t = makeTeacher()
+      const s = makeSubject({ weeklyFrequency: 3, consecutivePairs: 0 })
+      const a = makeAssignment({
+        subjectId: s.id,
+        teacherIds: [t.id],
+        weeklyCount: 3,
+        fixedDays: ['monday', 'wednesday', 'friday'] as DayOfWeek[],
+      })
+      const result = runGenerator([t], [s], [a])
+      expect(result.isComplete).toBe(true)
+
+      const entries = result.entries.filter((e) => e.assignmentId === a.id)
+      expect(entries.length).toBe(3)
+      const days = entries.map((e) => e.day).sort()
+      expect(days).toEqual(['friday', 'monday', 'wednesday'])
+    })
+
+    it('fixedDaysがweeklyCountより少ない場合、指定曜日には必ず配置される', () => {
+      const t = makeTeacher()
+      const s = makeSubject({ weeklyFrequency: 3, consecutivePairs: 0 })
+      const a = makeAssignment({
+        subjectId: s.id,
+        teacherIds: [t.id],
+        weeklyCount: 3,
+        fixedDays: ['monday', 'wednesday'] as DayOfWeek[],
+      })
+      const result = runGenerator([t], [s], [a])
+      expect(result.isComplete).toBe(true)
+
+      const entries = result.entries.filter((e) => e.assignmentId === a.id)
+      expect(entries.length).toBe(3)
+      // fixedDay指定の2コマは必ず月・水に入る
+      const mondayEntries = entries.filter((e) => e.day === 'monday')
+      const wednesdayEntries = entries.filter((e) => e.day === 'wednesday')
+      expect(mondayEntries.length).toBeGreaterThanOrEqual(1)
+      expect(wednesdayEntries.length).toBeGreaterThanOrEqual(1)
+    })
   })
 })

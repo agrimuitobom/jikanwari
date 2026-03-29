@@ -17,6 +17,7 @@ interface FormState {
   isSimultaneous: boolean
   simultaneousGroupId: string
   fixedSlots: FixedSlotEntry[]
+  fixedDays: DayOfWeek[]
   notes: string
 }
 
@@ -51,6 +52,7 @@ export function AssignmentForm({
     isSimultaneous: !!initialValues?.simultaneousGroupId,
     simultaneousGroupId: initialValues?.simultaneousGroupId ?? '',
     fixedSlots: initialValues?.fixedSlots?.map((s) => ({ day: s.day, period: s.period })) ?? [],
+    fixedDays: initialValues?.fixedDays ?? [],
     notes: initialValues?.notes ?? '',
   })
   const [submitting, setSubmitting] = useState(false)
@@ -160,6 +162,7 @@ export function AssignmentForm({
         weeklyCount: form.weeklyCount,
         ...(groupId ? { simultaneousGroupId: groupId } : {}),
         ...(validFixedSlots.length > 0 ? { fixedSlots: validFixedSlots } : {}),
+        ...(form.fixedDays.length > 0 ? { fixedDays: form.fixedDays } : {}),
         ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
       }))
       await onSubmit(inputs)
@@ -610,6 +613,54 @@ export function AssignmentForm({
         {form.fixedSlots.length > 0 && form.fixedSlots.length > form.weeklyCount && (
           <p className="text-xs text-amber-600">
             固定時間の数（{form.fixedSlots.length}）が週コマ数（{form.weeklyCount}）を超えています
+          </p>
+        )}
+      </section>
+
+      {/* ── セクション 5.5: 固定曜日 ── */}
+      <section className="space-y-3">
+        <h3 className="section-heading mb-0">固定曜日</h3>
+
+        <p className="text-xs text-gray-500">
+          時限は自由、曜日だけ固定したい場合に指定してください（例: 月・水・金に配置）
+        </p>
+
+        <div className="flex flex-wrap gap-2">
+          {DAYS.map((day) => {
+            const selected = form.fixedDays.includes(day)
+            return (
+              <button
+                key={day}
+                type="button"
+                onClick={() =>
+                  setForm((p) => ({
+                    ...p,
+                    fixedDays: selected
+                      ? p.fixedDays.filter((d) => d !== day)
+                      : [...p.fixedDays, day],
+                  }))
+                }
+                className={[
+                  'rounded-lg border px-4 py-2 text-sm font-medium transition-all',
+                  selected
+                    ? 'border-primary-300 bg-primary-50 text-primary-700 shadow-sm'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50',
+                ].join(' ')}
+              >
+                {DAY_LABELS[day]}
+              </button>
+            )
+          })}
+        </div>
+
+        {form.fixedDays.length > 0 && form.fixedDays.length < form.weeklyCount && (
+          <p className="text-xs text-gray-500">
+            {form.fixedDays.length}曜日に{form.weeklyCount}コマを配置します（同じ曜日に複数コマ入る場合があります）
+          </p>
+        )}
+        {form.fixedDays.length > 0 && form.fixedDays.length > form.weeklyCount && (
+          <p className="text-xs text-amber-600">
+            固定曜日数（{form.fixedDays.length}）が週コマ数（{form.weeklyCount}）より多いため、一部の曜日は使われません
           </p>
         )}
       </section>

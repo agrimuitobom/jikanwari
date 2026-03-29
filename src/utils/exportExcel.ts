@@ -89,6 +89,7 @@ export function exportToExcel(
   }
 
   // --- 教員別シート ---
+  const usedSheetNames = new Set(wb.SheetNames)
   for (const teacher of teachers) {
     const teacherEntries = entries.filter((e) => {
       const a = assignmentMap.get(e.assignmentId)
@@ -120,10 +121,24 @@ export function exportToExcel(
     ws['!rows'] = [{ hpt: 20 }, ...PERIODS.map(() => ({ hpt: 36 }))]
 
     // シート名は31文字制限・重複回避
-    const sheetName = teacher.name.slice(0, 28)
+    let sheetName = teacher.name.slice(0, 28)
+    if (usedSheetNames.has(sheetName)) {
+      let suffix = 2
+      while (usedSheetNames.has(`${sheetName}(${suffix})`)) suffix++
+      sheetName = `${sheetName}(${suffix})`
+    }
+    usedSheetNames.add(sheetName)
     XLSX.utils.book_append_sheet(wb, ws, sheetName)
   }
 
   // ファイル出力
-  XLSX.writeFile(wb, `timetable_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  const filename = `timetable_${new Date().toISOString().slice(0, 10)}.xlsx`
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+  const blob = new Blob([wbout], { type: 'application/octet-stream' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
 }

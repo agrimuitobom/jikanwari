@@ -14,7 +14,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from './config'
-import { COLLECTION, type Assignment, type CreateInput, type UpdateInput, type TimeSlot } from '../types'
+import { COLLECTION, type Assignment, type CreateInput, type UpdateInput, type TimeSlot, type DayOfWeek } from '../types'
 
 // ============================================================
 // バリデーション
@@ -113,6 +113,9 @@ function docToAssignment(snap: QueryDocumentSnapshot): Assignment {
     ...(d.fixedSlots && Array.isArray(d.fixedSlots) && d.fixedSlots.length > 0
       ? { fixedSlots: d.fixedSlots as TimeSlot[] }
       : {}),
+    ...(d.fixedDays && Array.isArray(d.fixedDays) && d.fixedDays.length > 0
+      ? { fixedDays: d.fixedDays as DayOfWeek[] }
+      : {}),
     ...(d.notes !== undefined ? { notes: d.notes as string } : {}),
     createdAt: (d.createdAt as Timestamp).toDate(),
     updatedAt: (d.updatedAt as Timestamp).toDate(),
@@ -142,6 +145,7 @@ export async function addAssignment(input: CreateInput<Assignment>): Promise<Ass
     weeklyCount: input.weeklyCount,
     ...(input.simultaneousGroupId ? { simultaneousGroupId: input.simultaneousGroupId } : {}),
     ...(input.fixedSlots && input.fixedSlots.length > 0 ? { fixedSlots: input.fixedSlots } : {}),
+    ...(input.fixedDays && input.fixedDays.length > 0 ? { fixedDays: input.fixedDays } : {}),
     ...(input.notes !== undefined ? { notes: input.notes } : {}),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),

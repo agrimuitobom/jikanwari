@@ -72,6 +72,8 @@ interface ScheduleTask {
   simultaneousGroupId?: string
   /** 固定配置スロット（指定時は自動配置せずここに配置） */
   fixedSlot?: Slot
+  /** 固定曜日（曜日のみ指定、時限は自動） */
+  fixedDay?: DayOfWeek
   /** タスク生成時のオリジナルインデックス（識別用） */
   originalIndex: number
 }
@@ -169,6 +171,21 @@ function mergeFixedSlots(groupAssignments: Assignment[]): { day: DayOfWeek; peri
       if (!seen.has(key)) {
         seen.add(key)
         merged.push({ day: slot.day, period: slot.period })
+      }
+    }
+  }
+  return merged
+}
+
+/** 同時開講グループの固定曜日をマージ（重複排除） */
+function mergeFixedDays(groupAssignments: Assignment[]): DayOfWeek[] {
+  const seen = new Set<DayOfWeek>()
+  const merged: DayOfWeek[] = []
+  for (const a of groupAssignments) {
+    for (const day of a.fixedDays ?? []) {
+      if (!seen.has(day)) {
+        seen.add(day)
+        merged.push(day)
       }
     }
   }
@@ -386,12 +403,14 @@ function buildTasks(
 
     const room = assignment.roomId ? roomMap.get(assignment.roomId) : undefined
     const fixedSlots = sortFixedSlots(assignment.fixedSlots ?? [])
+    const fixedDays = assignment.fixedDays ?? []
     // fixedSlotsから隣接ペアを自動検出し、consecutivePairsを補完
     const extraPairs = detectAdjacentFixedPairs(fixedSlots, subject.consecutivePairs)
     const consecutivePairs = subject.consecutivePairs + extraPairs
     const consecutiveSlots = consecutivePairs * 2
     const singleSlots = Math.max(0, assignment.weeklyCount - consecutiveSlots)
     let fixedIdx = 0
+    let fixedDayIdx = 0
 
     // 連続ペアタスクを生成
     for (let i = 0; i < consecutivePairs; i++) {
@@ -405,7 +424,9 @@ function buildTasks(
         // 連続ペアの後半時限（startPeriod+1）もfixedSlotsにある場合はスキップ
         fixedIdx += skipConsecutiveSecondHalf(fixedSlots, fixedIdx, fixedSlot)
       }
-      const priority = fixedSlot ? -1000 : calculatePriority(subject, teachers)
+      // fixedSlotがないタスクにfixedDayを割り当て
+      const fixedDay = !fixedSlot && fixedDayIdx < fixedDays.length ? fixedDays[fixedDayIdx++] : undefined
+      const priority = fixedSlot ? -1000 : fixedDay ? -500 : calculatePriority(subject, teachers)
 
       tasks.push({
         assignments: [assignment],
@@ -415,6 +436,7 @@ function buildTasks(
         isConsecutive: true,
         priority: priority - 100, // 連続タスクは制約が厳しいので優先
         fixedSlot,
+        fixedDay,
         originalIndex: taskIndex++,
       })
     }
@@ -425,7 +447,9 @@ function buildTasks(
         ? { day: fixedSlots[fixedIdx].day, period: fixedSlots[fixedIdx].period }
         : undefined
       if (fixedSlot) fixedIdx++
-      const priority = fixedSlot ? -1000 : calculatePriority(subject, teachers)
+      // fixedSlotがないタスクにfixedDayを割り当て
+      const fixedDay = !fixedSlot && fixedDayIdx < fixedDays.length ? fixedDays[fixedDayIdx++] : undefined
+      const priority = fixedSlot ? -1000 : fixedDay ? -500 : calculatePriority(subject, teachers)
 
       tasks.push({
         assignments: [assignment],
@@ -435,6 +459,7 @@ function buildTasks(
         isConsecutive: false,
         priority,
         fixedSlot,
+        fixedDay,
         originalIndex: taskIndex++,
       })
     }
@@ -469,12 +494,15 @@ function buildTasks(
 
     // 同時開講グループの固定スロットは全assignmentからマージ（重複排除・ソート済み）
     const groupFixedSlots = sortFixedSlots(mergeFixedSlots(groupAssignments))
+    // 同時開講グループの固定曜日もマージ（重複排除）
+    const groupFixedDays = mergeFixedDays(groupAssignments)
     // fixedSlotsから隣接ペアを自動検出し、consecutivePairsを補完
     const extraPairs = detectAdjacentFixedPairs(groupFixedSlots, maxConsecutivePairs)
     maxConsecutivePairs += extraPairs
     const consecutiveSlots = maxConsecutivePairs * 2
     const singleSlots = Math.max(0, weeklyCount - consecutiveSlots)
     let fixedIdx = 0
+    let groupFixedDayIdx = 0
 
     // 連続ペアタスク
     for (let i = 0; i < maxConsecutivePairs; i++) {
@@ -488,6 +516,7 @@ function buildTasks(
         // 連続ペアの後半時限もfixedSlotsにある場合はスキップ
         fixedIdx += skipConsecutiveSecondHalf(groupFixedSlots, fixedIdx, fixedSlot)
       }
+      const fixedDay = !fixedSlot && groupFixedDayIdx < groupFixedDays.length ? groupFixedDays[groupFixedDayIdx++] : undefined
 
       if (fixedSlot) {
         tasks.push({
@@ -502,7 +531,7 @@ function buildTasks(
           originalIndex: taskIndex++,
         })
       } else {
-        let priority = -200
+        let priority = fixedDay ? -700 : -200
         const allTeachers = getAllTeachersFlat({ assignments: groupAssignments, subjects: groupSubjects, teacherGroups: groupTeacherGroups, rooms: groupRooms, isConsecutive: true, priority: 0, originalIndex: 0 })
         priority -= allTeachers.length * 20
         priority -= 100 // 連続タスクボーナス
@@ -528,6 +557,7 @@ function buildTasks(
           isConsecutive: true,
           priority,
           simultaneousGroupId: groupId,
+          fixedDay,
           originalIndex: taskIndex++,
         })
       }
@@ -539,6 +569,7 @@ function buildTasks(
         ? { day: groupFixedSlots[fixedIdx].day, period: groupFixedSlots[fixedIdx].period }
         : undefined
       if (fixedSlot) fixedIdx++
+      const fixedDay = !fixedSlot && groupFixedDayIdx < groupFixedDays.length ? groupFixedDays[groupFixedDayIdx++] : undefined
 
       if (fixedSlot) {
         tasks.push({
@@ -553,7 +584,7 @@ function buildTasks(
           originalIndex: taskIndex++,
         })
       } else {
-        let priority = -200
+        let priority = fixedDay ? -700 : -200
         const allTeachers = getAllTeachersFlat({ assignments: groupAssignments, subjects: groupSubjects, teacherGroups: groupTeacherGroups, rooms: groupRooms, isConsecutive: false, priority: 0, originalIndex: 0 })
         priority -= allTeachers.length * 20
         priority -= groupAssignments.length * 30
@@ -578,6 +609,7 @@ function buildTasks(
           isConsecutive: false,
           priority,
           simultaneousGroupId: groupId,
+          fixedDay,
           originalIndex: taskIndex++,
         })
       }
@@ -658,9 +690,11 @@ function getCandidateSlots(
     return []
   }
 
+  // fixedDay: 指定曜日のみを候補にする（時限は自動）
+  const allowedDays = task.fixedDay ? [task.fixedDay] : DAYS
   const candidates: Slot[] = []
 
-  for (const day of DAYS) {
+  for (const day of allowedDays) {
     if (task.isConsecutive) {
       // 連続授業: 1-2, 3-4, 5-6 のペアから候補を探す
       for (const startPeriod of CONSECUTIVE_STARTS) {
