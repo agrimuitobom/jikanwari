@@ -12,6 +12,7 @@ import { TimetableGrid } from './TimetableGrid'
 import type { ViewMode } from './TimetableGrid'
 import { UnplacedSidebar } from './UnplacedSidebar'
 import { ScheduleCompare } from './ScheduleCompare'
+import { exportToExcel } from '../../utils/exportExcel'
 
 // ============================================================
 // Props
@@ -235,13 +236,17 @@ export function ScheduleViewContainer({
       setResult(res)
 
       // 生成結果を自動保存
-      const name = `案${schedules.length + 1}`
+      const maxNum = schedules.reduce((max, s) => {
+        const m = s.name.match(/^案(\d+)/)
+        return m ? Math.max(max, parseInt(m[1], 10)) : max
+      }, 0)
+      const name = `案${maxNum + 1}`
       const saved = await saveSchedule(name, res, res.unplacedTasks)
       setActiveScheduleId(saved.id)
     } finally {
       setIsRunning(false)
     }
-  }, [teachers, subjects, assignments, schedulerOptions, schedules.length, saveSchedule])
+  }, [teachers, subjects, assignments, schedulerOptions, schedules, saveSchedule])
 
   // ---- 部分再生成（手動配置済みを固定して残りだけ再生成） ----
   const handlePartialRegenerate = useCallback(async () => {
@@ -261,7 +266,11 @@ export function ScheduleViewContainer({
       setResult(res)
 
       // 部分再生成結果を自動保存
-      const name = `案${schedules.length + 1}(部分再生成)`
+      const maxNum = schedules.reduce((max, s) => {
+        const m = s.name.match(/^案(\d+)/)
+        return m ? Math.max(max, parseInt(m[1], 10)) : max
+      }, 0)
+      const name = `案${maxNum + 1}(部分再生成)`
       const saved = await saveSchedule(name, res, res.unplacedTasks)
       setActiveScheduleId(saved.id)
     } finally {
@@ -432,19 +441,6 @@ export function ScheduleViewContainer({
         </div>
       )}
 
-      {/* スケジュール比較ビュー */}
-      {compareSchedules && compareSchedules[0] && compareSchedules[1] && (
-        <ScheduleCompare
-          scheduleA={compareSchedules[0]}
-          scheduleB={compareSchedules[1]}
-          teachers={teachers}
-          subjects={subjects}
-          assignments={assignments}
-          classOptions={classOptions}
-          onClose={() => setCompareIds(null)}
-        />
-      )}
-
       {/* ツールバー */}
       <div className="card p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -578,6 +574,13 @@ export function ScheduleViewContainer({
                 className="btn-secondary text-xs"
               >
                 CSV出力
+              </button>
+              <button
+                type="button"
+                onClick={() => exportToExcel(entries, assignments, subjects, teachers)}
+                className="btn-secondary text-xs"
+              >
+                Excel出力
               </button>
               <button
                 type="button"
@@ -752,6 +755,19 @@ export function ScheduleViewContainer({
             })}
           </div>
         </div>
+      )}
+
+      {/* スケジュール比較ビュー */}
+      {compareSchedules && compareSchedules[0] && compareSchedules[1] && (
+        <ScheduleCompare
+          scheduleA={compareSchedules[0]}
+          scheduleB={compareSchedules[1]}
+          teachers={teachers}
+          subjects={subjects}
+          assignments={assignments}
+          classOptions={classOptions}
+          onClose={() => setCompareIds(null)}
+        />
       )}
 
       {/* データ不足メッセージ */}
