@@ -157,6 +157,25 @@ function skipConsecutiveSecondHalf(
 }
 
 /**
+ * 同時開講グループの全assignmentからfixedSlotsをマージし、重複を排除する。
+ * ユーザーがグループ内のどのassignmentにfixedSlotsを設定しても反映される。
+ */
+function mergeFixedSlots(groupAssignments: Assignment[]): { day: DayOfWeek; period: Period }[] {
+  const seen = new Set<string>()
+  const merged: { day: DayOfWeek; period: Period }[] = []
+  for (const a of groupAssignments) {
+    for (const slot of a.fixedSlots ?? []) {
+      const key = `${slot.day}:${slot.period}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        merged.push({ day: slot.day, period: slot.period })
+      }
+    }
+  }
+  return merged
+}
+
+/**
  * 連続ペア用の固定スロットを正規化する。
  * ユーザーがペアの後半時限（2, 4, 6限）を固定スロットとして登録した場合、
  * 開始時限（1, 3, 5限）に補正する。
@@ -420,8 +439,8 @@ function buildTasks(
 
     const consecutiveSlots = maxConsecutivePairs * 2
     const singleSlots = weeklyCount - consecutiveSlots
-    // 同時開講グループの固定スロットは最初のassignmentから取得（ソート済み）
-    const groupFixedSlots = sortFixedSlots(groupAssignments[0]?.fixedSlots ?? [])
+    // 同時開講グループの固定スロットは全assignmentからマージ（重複排除・ソート済み）
+    const groupFixedSlots = sortFixedSlots(mergeFixedSlots(groupAssignments))
     let fixedIdx = 0
 
     // 連続ペアタスク
@@ -1275,14 +1294,14 @@ function preReserveFixedSlots(
  * 固定タスクを強制配置する。固定スロットを占拠する非固定タスクを排除して配置する。
  * 固定タスク同士の競合は排除しない（データ不整合として扱う）。
  *
- * @returns 排除されたタスクの配列（空なら配置失敗）
+ * @returns { success, evictedTasks } - success: 配置成功したか, evictedTasks: 排除されたタスク
  */
 function forceFixedTaskPlacement(
   task: ScheduleTask,
   state: BoardState,
   placementMap: Map<string, PlacementRecord>,
-): ScheduleTask[] {
-  if (!task.fixedSlot) return []
+): { success: boolean; evictedTasks: ScheduleTask[] } {
+  if (!task.fixedSlot) return { success: false, evictedTasks: [] }
 
   const { day, period } = task.fixedSlot
   const checkPeriods: Period[] = task.isConsecutive
@@ -1295,13 +1314,14 @@ function forceFixedTaskPlacement(
   for (let i = 0; i < task.assignments.length; i++) {
     const a = task.assignments[i]
     const ts = task.teacherGroups[i]
+    const room = task.rooms[i]
 
     for (const p of checkPeriods) {
       // クラス競合
       if (!isSlotFreeForClass(state, day, p, a.classId)) {
         const rec = placementMap.get(cellKey(day, p, a.classId))
         if (rec) {
-          if (rec.task.fixedSlot) return [] // 固定タスク同士の競合は強制排除しない
+          if (rec.task.fixedSlot) return { success: false, evictedTasks: [] } // 固定タスク同士の競合は強制排除しない
           blockersToEvict.add(rec)
         }
       }
@@ -1314,7 +1334,7 @@ function forceFixedTaskPlacement(
             // 全エントリを探す
             for (const [, rec] of placementMap) {
               if (rec.entries.some((e) => e.assignmentId === blockAId && e.day === day && e.period === p)) {
-                if (rec.task.fixedSlot) return [] // 固定タスク同士は排除しない
+                if (rec.task.fixedSlot) return { success: false, evictedTasks: [] } // 固定タスク同士は排除しない
                 blockersToEvict.add(rec)
                 break
               }
@@ -1322,12 +1342,27 @@ function forceFixedTaskPlacement(
           }
         }
       }
+      // 施設競合
+      if (room && !isSlotFreeForRoom(state, day, p, room.id)) {
+        const blockAId = state.roomGrid.get(cellKey(day, p, room.id))
+        if (blockAId) {
+          for (const [, rec] of placementMap) {
+            if (rec.entries.some((e) => e.assignmentId === blockAId && e.day === day && e.period === p)) {
+              if (rec.task.fixedSlot) return { success: false, evictedTasks: [] }
+              blockersToEvict.add(rec)
+              break
+            }
+          }
+        }
+      }
       // 教員の勤務可能チェック（これは排除では解決できない）
       for (const t of ts) {
-        if (!isTeacherAvailable(t, day, p)) return [] // ハード制約
+        if (!isTeacherAvailable(t, day, p)) return { success: false, evictedTasks: [] } // ハード制約
       }
       // 科目の除外時限チェック
-      if (isExcludedPeriodForSubject(task.subjects[i], p)) return []
+      if (isExcludedPeriodForSubject(task.subjects[i], p)) return { success: false, evictedTasks: [] }
+      // 施設の利用不可チェック（ハード制約）
+      if (room && !isRoomAvailable(room, day, p)) return { success: false, evictedTasks: [] }
     }
   }
 
@@ -1340,9 +1375,9 @@ function forceFixedTaskPlacement(
       for (const e of entries) {
         placementMap.set(cellKey(e.day, e.period, e.classId), record)
       }
-      return [/* no evicted tasks */]
+      return { success: true, evictedTasks: [] }
     }
-    return []
+    return { success: false, evictedTasks: [] }
   }
 
   // 非固定ブロッカーを全て排除
@@ -1365,13 +1400,11 @@ function forceFixedTaskPlacement(
     for (const e of entries) {
       placementMap.set(cellKey(e.day, e.period, e.classId), record)
     }
-    return evictedTasks
+    return { success: true, evictedTasks }
   }
 
-  // 配置に失敗した場合、排除したタスクを復元（ロールバック）
-  // ※ここに来るのは稀（上のブロッカー収集が網羅的なら来ない）
-  // 簡易的にevictedTasksを返して再配置に回す
-  return []
+  // 配置に失敗した場合、排除したタスクを再配置に回す（ロストさせない）
+  return { success: false, evictedTasks }
 }
 
 /**
@@ -2354,12 +2387,13 @@ export function* generateSchedule(
     const forcedUnplacedFixed: ScheduleTask[] = []
 
     for (const task of unplacedFixed) {
-      const evicted = forceFixedTaskPlacement(task, state, placementMap)
-      if (evicted.length > 0) {
-        // 排除されたタスクを未配置リストに追加
-        unplacedNonFixed.push(...evicted)
-      } else {
-        // 排除できなかった（別の固定タスクがブロック）
+      const result = forceFixedTaskPlacement(task, state, placementMap)
+      if (result.evictedTasks.length > 0) {
+        // 排除されたタスクを未配置リストに追加（配置成功・失敗に関わらず再配置に回す）
+        unplacedNonFixed.push(...result.evictedTasks)
+      }
+      if (!result.success) {
+        // 固定タスクの配置に失敗
         forcedUnplacedFixed.push(task)
       }
     }
