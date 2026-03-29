@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Assignment, Teacher, Subject, CreateInput, TimeSlot, DayOfWeek, Period } from '../../types'
+import type { Assignment, Teacher, Subject, Room, CreateInput, TimeSlot, DayOfWeek, Period } from '../../types'
 import { ErrorAlert } from '../common/ErrorAlert'
 import { CLASS_OPTIONS, SUBJECT_CATEGORIES, DAYS, DAY_LABELS, PERIODS } from '../../utils/constants'
 import type { ClassOption } from '../../utils/constants'
@@ -14,6 +14,7 @@ interface FormState {
   subjectId: string
   teacherIds: string[]
   weeklyCount: number
+  roomId: string
   isSimultaneous: boolean
   simultaneousGroupId: string
   fixedSlots: FixedSlotEntry[]
@@ -25,6 +26,7 @@ interface AssignmentFormProps {
   initialValues?: Assignment
   teachers: Teacher[]
   subjects: Subject[]
+  rooms?: Room[]
   existingAssignments?: Assignment[]
   onSubmit: (data: CreateInput<Assignment>[]) => Promise<void>
   onCancel: () => void
@@ -38,6 +40,7 @@ export function AssignmentForm({
   initialValues,
   teachers,
   subjects,
+  rooms = [],
   existingAssignments = [],
   onSubmit,
   onCancel,
@@ -49,6 +52,7 @@ export function AssignmentForm({
     subjectId: initialValues?.subjectId ?? '',
     teacherIds: initialValues?.teacherIds ?? [],
     weeklyCount: initialValues?.weeklyCount ?? 2,
+    roomId: initialValues?.roomId ?? '',
     isSimultaneous: !!initialValues?.simultaneousGroupId,
     simultaneousGroupId: initialValues?.simultaneousGroupId ?? '',
     fixedSlots: initialValues?.fixedSlots?.map((s) => ({ day: s.day, period: s.period })) ?? [],
@@ -160,6 +164,7 @@ export function AssignmentForm({
         subjectId: form.subjectId,
         teacherIds: form.teacherIds,
         weeklyCount: form.weeklyCount,
+        ...(form.roomId ? { roomId: form.roomId } : {}),
         ...(groupId ? { simultaneousGroupId: groupId } : {}),
         ...(validFixedSlots.length > 0 ? { fixedSlots: validFixedSlots } : {}),
         ...(form.fixedDays.length > 0 ? { fixedDays: form.fixedDays } : {}),
@@ -363,6 +368,28 @@ export function AssignmentForm({
           )}
         </div>
       </section>
+
+      {/* ── セクション 2.5: 使用教室 ── */}
+      {rooms.length > 0 && (
+        <section className="space-y-4">
+          <h3 className="section-heading">使用教室・施設</h3>
+          <select
+            value={form.roomId}
+            onChange={(e) => setForm((p) => ({ ...p, roomId: e.target.value }))}
+            className="form-select"
+          >
+            <option value="">指定なし（教室制約なし）</option>
+            {rooms.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}{r.category ? ` （${r.category}）` : ''}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500">
+            指定すると、同じ教室を使う他の授業と時間が重ならないようスケジューラが自動調整します
+          </p>
+        </section>
+      )}
 
       {/* ── セクション 3: 同時開講設定 ── */}
       {(form.classIds.length >= 2 || isEditMode) && (

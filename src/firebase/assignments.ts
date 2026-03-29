@@ -109,6 +109,7 @@ function docToAssignment(snap: QueryDocumentSnapshot): Assignment {
     // teacherIds は文字列配列として保存・復元
     teacherIds: (d.teacherIds ?? []) as string[],
     weeklyCount: d.weeklyCount as number,
+    ...(d.roomId ? { roomId: d.roomId as string } : {}),
     ...(d.simultaneousGroupId ? { simultaneousGroupId: d.simultaneousGroupId as string } : {}),
     ...(d.fixedSlots && Array.isArray(d.fixedSlots) && d.fixedSlots.length > 0
       ? { fixedSlots: d.fixedSlots as TimeSlot[] }
@@ -143,6 +144,7 @@ export async function addAssignment(input: CreateInput<Assignment>): Promise<Ass
     subjectId: input.subjectId,
     teacherIds: input.teacherIds,
     weeklyCount: input.weeklyCount,
+    ...(input.roomId ? { roomId: input.roomId } : {}),
     ...(input.simultaneousGroupId ? { simultaneousGroupId: input.simultaneousGroupId } : {}),
     ...(input.fixedSlots && input.fixedSlots.length > 0 ? { fixedSlots: input.fixedSlots } : {}),
     ...(input.fixedDays && input.fixedDays.length > 0 ? { fixedDays: input.fixedDays } : {}),
