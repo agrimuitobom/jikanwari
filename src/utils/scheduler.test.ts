@@ -896,5 +896,54 @@ describe('scheduler', () => {
         }
       }
     })
+
+    it('consecutivePairs=0でもfixedSlotsに隣接ペア(5,6)がある場合、連続ペアとして配置される', () => {
+      // バグ再現: subject.consecutivePairs=0 だが fixedSlots=[{火,5},{火,6}] で
+      // 2つの単独タスクが作られ、同日同科目制約で火6のタスクが配置不可になっていた
+      const t1 = makeTeacher({ name: '教員1' })
+      const t2 = makeTeacher({ name: '教員2' })
+      const subject = makeSubject({
+        name: '課題研究E',
+        grade: 3,
+        category: '農業',
+        credits: 2,
+        weeklyFrequency: 2,
+        consecutivePairs: 0, // 意図的に0
+      })
+      const a1 = makeAssignment({
+        classId: 'grade3-class1',
+        subjectId: subject.id,
+        teacherIds: [t1.id],
+        weeklyCount: 2,
+        fixedSlots: [
+          { day: 'tuesday' as DayOfWeek, period: 5 as Period },
+          { day: 'tuesday' as DayOfWeek, period: 6 as Period },
+        ],
+        simultaneousGroupId: 'kadai-e',
+      })
+      const a2 = makeAssignment({
+        classId: 'grade3-class2',
+        subjectId: subject.id,
+        teacherIds: [t2.id],
+        weeklyCount: 2,
+        fixedSlots: [
+          { day: 'tuesday' as DayOfWeek, period: 5 as Period },
+          { day: 'tuesday' as DayOfWeek, period: 6 as Period },
+        ],
+        simultaneousGroupId: 'kadai-e',
+      })
+
+      const result = runGenerator([t1, t2], [subject], [a1, a2])
+      expect(result.isComplete).toBe(true)
+      expect(result.unplacedTasks.length).toBe(0)
+      for (const a of [a1, a2]) {
+        const entries = result.entries.filter((e) => e.assignmentId === a.id)
+        expect(entries.length).toBe(2)
+        for (const entry of entries) {
+          expect(entry.day).toBe('tuesday')
+          expect([5, 6]).toContain(entry.period)
+        }
+      }
+    })
   })
 })

@@ -176,6 +176,34 @@ function mergeFixedSlots(groupAssignments: Assignment[]): { day: DayOfWeek; peri
 }
 
 /**
+ * fixedSlotsから隣接ペア（1-2, 3-4, 5-6）を検出し、必要な追加連続ペア数を返す。
+ * consecutivePairsが不足している場合にfixedSlotsの意図から自動補完する。
+ * 例: fixedSlots=[{火,5},{火,6}] で consecutivePairs=0 → 追加1ペア
+ */
+function detectAdjacentFixedPairs(
+  fixedSlots: { day: DayOfWeek; period: Period }[],
+  existingConsecutivePairs: number,
+): number {
+  const sorted = sortFixedSlots(fixedSlots)
+  let detectedPairs = 0
+  let i = 0
+  while (i < sorted.length) {
+    const current = sorted[i]
+    // 開始時限（1,3,5）に次の時限（2,4,6）が同日にある場合のみ連続ペアとして検出
+    if (CONSECUTIVE_STARTS.includes(current.period) && i + 1 < sorted.length) {
+      const next = sorted[i + 1]
+      if (next.day === current.day && next.period === ((current.period + 1) as Period)) {
+        detectedPairs++
+        i += 2 // skip both
+        continue
+      }
+    }
+    i++
+  }
+  return Math.max(0, detectedPairs - existingConsecutivePairs)
+}
+
+/**
  * 連続ペア用の固定スロットを正規化する。
  * ユーザーがペアの後半時限（2, 4, 6限）を固定スロットとして登録した場合、
  * 開始時限（1, 3, 5限）に補正する。
@@ -357,10 +385,12 @@ function buildTasks(
     if (teachers.length === 0) continue
 
     const room = assignment.roomId ? roomMap.get(assignment.roomId) : undefined
-    const consecutivePairs = subject.consecutivePairs
-    const consecutiveSlots = consecutivePairs * 2
-    const singleSlots = assignment.weeklyCount - consecutiveSlots
     const fixedSlots = sortFixedSlots(assignment.fixedSlots ?? [])
+    // fixedSlotsから隣接ペアを自動検出し、consecutivePairsを補完
+    const extraPairs = detectAdjacentFixedPairs(fixedSlots, subject.consecutivePairs)
+    const consecutivePairs = subject.consecutivePairs + extraPairs
+    const consecutiveSlots = consecutivePairs * 2
+    const singleSlots = Math.max(0, assignment.weeklyCount - consecutiveSlots)
     let fixedIdx = 0
 
     // 連続ペアタスクを生成
@@ -437,10 +467,13 @@ function buildTasks(
     }
     if (!valid) continue
 
-    const consecutiveSlots = maxConsecutivePairs * 2
-    const singleSlots = weeklyCount - consecutiveSlots
     // 同時開講グループの固定スロットは全assignmentからマージ（重複排除・ソート済み）
     const groupFixedSlots = sortFixedSlots(mergeFixedSlots(groupAssignments))
+    // fixedSlotsから隣接ペアを自動検出し、consecutivePairsを補完
+    const extraPairs = detectAdjacentFixedPairs(groupFixedSlots, maxConsecutivePairs)
+    maxConsecutivePairs += extraPairs
+    const consecutiveSlots = maxConsecutivePairs * 2
+    const singleSlots = Math.max(0, weeklyCount - consecutiveSlots)
     let fixedIdx = 0
 
     // 連続ペアタスク
@@ -610,14 +643,15 @@ function getCandidateSlots(
   state: BoardState,
 ): Slot[] {
   // 固定スロットの場合はそのスロットのみを候補にする
+  // 固定スロットはユーザー指定なので同日同科目制約をバイパス
   if (task.fixedSlot) {
     const { day, period } = task.fixedSlot
     if (task.isConsecutive) {
-      if (canPlaceTask(task, state, day, period) && canPlaceTask(task, state, day, (period + 1) as Period)) {
+      if (canPlaceTask(task, state, day, period, true) && canPlaceTask(task, state, day, (period + 1) as Period, true)) {
         return [{ day, period }]
       }
     } else {
-      if (canPlaceTask(task, state, day, period)) {
+      if (canPlaceTask(task, state, day, period, true)) {
         return [{ day, period }]
       }
     }
@@ -656,6 +690,7 @@ function canPlaceTask(
   state: BoardState,
   day: DayOfWeek,
   period: Period,
+  skipSameDaySubject = false,
 ): boolean {
   for (let i = 0; i < task.assignments.length; i++) {
     const assignment = task.assignments[i]
@@ -663,7 +698,7 @@ function canPlaceTask(
     const teachers = task.teacherGroups[i]
     const room = task.rooms[i]
 
-    if (!canPlaceSingle(assignment, subject, teachers, state, day, period, room)) {
+    if (!canPlaceSingle(assignment, subject, teachers, state, day, period, room, skipSameDaySubject)) {
       return false
     }
   }
@@ -679,6 +714,7 @@ function canPlaceSingle(
   day: DayOfWeek,
   period: Period,
   room?: Room,
+  skipSameDaySubject = false,
 ): boolean {
   const classId = assignment.classId
 
@@ -700,7 +736,8 @@ function canPlaceSingle(
   // 同日同科目禁止: 同じクラスで同じ日に同じ科目は配置不可
   // 連続授業は同日2コマが前提なのでスキップ。ただし spreadDays の場合は
   // 連続授業でも同日に複数ペア配置しない（例: 家庭基礎4単位を2コマ×別日に分散）
-  if (subject.consecutivePairs === 0 || subject.spreadDays) {
+  // 固定スロットの場合はユーザー指定を優先するためスキップ
+  if (!skipSameDaySubject && (subject.consecutivePairs === 0 || subject.spreadDays)) {
     const cdsKey = classDaySubjectKey(day, classId, subject.id)
     if ((state.classDaySubjectCount.get(cdsKey) ?? 0) > 0) return false
   }
@@ -1390,10 +1427,10 @@ function forceFixedTaskPlacement(
     evictedTasks.push(rec.task)
   }
 
-  // 固定タスクを配置
+  // 固定タスクを配置（同日同科目制約はバイパス: ユーザーが固定指定しているため）
   if (task.isConsecutive
-    ? canPlaceTask(task, state, day, period) && canPlaceTask(task, state, day, (period + 1) as Period)
-    : canPlaceTask(task, state, day, period)
+    ? canPlaceTask(task, state, day, period, true) && canPlaceTask(task, state, day, (period + 1) as Period, true)
+    : canPlaceTask(task, state, day, period, true)
   ) {
     const entries = placeTask(task, state, day, period)
     const record: PlacementRecord = { task, entries, day, startPeriod: period }
@@ -1791,10 +1828,11 @@ function tryRelocateTask(
         }
       }
 
-      // タスク配置チェック
+      // タスク配置チェック（固定タスクは同日同科目制約をバイパス）
+      const skipSDS = !!task.fixedSlot
       const canNow = task.isConsecutive
-        ? canPlaceTask(task, state, day, period) && canPlaceTask(task, state, day, (period + 1) as Period)
-        : canPlaceTask(task, state, day, period)
+        ? canPlaceTask(task, state, day, period, skipSDS) && canPlaceTask(task, state, day, (period + 1) as Period, skipSDS)
+        : canPlaceTask(task, state, day, period, skipSDS)
 
       if (canNow) {
         const ourEntries = placeTask(task, state, day, period)
