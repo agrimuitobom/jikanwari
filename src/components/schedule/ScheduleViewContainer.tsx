@@ -12,6 +12,7 @@ import { TimetableGrid } from './TimetableGrid'
 import type { ViewMode } from './TimetableGrid'
 import { UnplacedSidebar } from './UnplacedSidebar'
 import { ScheduleCompare } from './ScheduleCompare'
+import { exportToExcel } from '../../utils/exportExcel'
 
 // ============================================================
 // Props
@@ -573,6 +574,13 @@ export function ScheduleViewContainer({
                 className="btn-secondary text-xs"
               >
                 CSV出力
+              </button>
+              <button
+                type="button"
+                onClick={() => exportToExcel(entries, assignments, subjects, teachers)}
+                className="btn-secondary text-xs"
+              >
+                Excel出力
               </button>
               <button
                 type="button"
