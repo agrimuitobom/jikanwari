@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react'
-import type { Teacher, Subject, SubjectCategory, Assignment, CreateInput } from './types'
+import type { Teacher, Subject, SubjectCategory, Assignment, Room, CreateInput } from './types'
 
 import { useAuth } from './hooks/useAuth'
 import { useTeachers } from './hooks/useTeachers'
 import { useSubjects } from './hooks/useSubjects'
 import { useAssignments } from './hooks/useAssignments'
+import { useRooms } from './hooks/useRooms'
 
 import { LoadingSpinner } from './components/common/LoadingSpinner'
 import { ErrorAlert } from './components/common/ErrorAlert'
@@ -21,6 +22,9 @@ import { AssignmentForm } from './components/assignment/AssignmentForm'
 import { AssignmentBulkForm } from './components/assignment/AssignmentBulkForm'
 import { AssignmentList } from './components/assignment/AssignmentList'
 
+import { RoomForm } from './components/room/RoomForm'
+import { RoomList } from './components/room/RoomList'
+
 import { useSettings } from './hooks/useSettings'
 import { buildClassOptions, getClassLabel, SUBJECT_CATEGORIES } from './utils/constants'
 
@@ -36,11 +40,12 @@ const SettingsPanel = lazy(() =>
 // タブ定義
 // ============================================================
 
-type Tab = 'schedule' | 'teachers' | 'subjects' | 'assignments' | 'settings'
+type Tab = 'schedule' | 'teachers' | 'subjects' | 'assignments' | 'rooms' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'teachers', label: '教員管理' },
   { id: 'subjects', label: '科目管理' },
+  { id: 'rooms', label: '教室・施設' },
   { id: 'assignments', label: '授業割当' },
   { id: 'schedule', label: '時間割' },
   { id: 'settings', label: '設定' },
@@ -362,6 +367,7 @@ function AssignmentSection() {
   } = useAssignments()
   const { teachers } = useTeachers()
   const { subjects } = useSubjects()
+  const { rooms } = useRooms()
 
   const [editTarget, setEditTarget] = useState<Assignment | null>(null)
   const [showForm, setShowForm] = useState(false)
@@ -429,6 +435,7 @@ function AssignmentSection() {
             initialValues={editTarget ?? undefined}
             teachers={teachers}
             subjects={subjects}
+            rooms={rooms}
             existingAssignments={assignments}
             onSubmit={handleSubmit}
             onCancel={closeForm}
@@ -457,6 +464,119 @@ function AssignmentSection() {
           subjects={subjects}
           onEdit={openEdit}
           onDelete={deleteAssignment}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+// 教室・施設管理セクション
+// ============================================================
+
+function RoomSection() {
+  const { rooms, loading, error, clearError, addRoom, updateRoom, deleteRoom } = useRooms()
+  const { assignments } = useAssignments()
+
+  const [editTarget, setEditTarget] = useState<Room | null>(null)
+  const [showForm, setShowForm] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  const filteredRooms = rooms.filter((r) => {
+    if (searchQuery && !r.name.includes(searchQuery) && !(r.category ?? '').includes(searchQuery)) return false
+    return true
+  })
+
+  const openCreate = () => {
+    setEditTarget(null)
+    setShowForm(true)
+  }
+  const openEdit = (r: Room) => {
+    setEditTarget(r)
+    setShowForm(true)
+  }
+  const closeForm = () => {
+    setShowForm(false)
+    setEditTarget(null)
+  }
+
+  const handleSubmit = async (data: CreateInput<Room>) => {
+    if (editTarget) {
+      await updateRoom(editTarget.id, data)
+    } else {
+      await addRoom(data)
+    }
+    closeForm()
+  }
+
+  const handleDelete = async (id: string) => {
+    const usedIn = assignments.filter((a) => a.roomId === id)
+    if (usedIn.length > 0) {
+      alert(`この施設は${usedIn.length}件の授業割当で使用中のため削除できません。\n先に該当する授業割当の教室設定を変更してください。`)
+      return
+    }
+    await deleteRoom(id)
+  }
+
+  if (loading) return <LoadingSpinner message="教室データを読み込み中..." />
+
+  return (
+    <div className="space-y-4">
+      {error && <ErrorAlert message={error.message} onDismiss={clearError} />}
+
+      {showForm && (
+        <div className="card p-6 sm:p-8">
+          <RoomForm
+            initialValues={editTarget ?? undefined}
+            onSubmit={handleSubmit}
+            onCancel={closeForm}
+          />
+        </div>
+      )}
+      <div className={showForm ? 'hidden' : undefined}>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none">
+                <path fillRule="evenodd" d="M9.965 11.026a5 5 0 1 1 1.06-1.06l2.755 2.754a.75.75 0 1 1-1.06 1.06l-2.755-2.754ZM10.5 7a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" clipRule="evenodd" />
+              </svg>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="施設名で検索..."
+                className="input py-2 pl-8 pr-8 text-sm w-48"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+                    <path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            {searchQuery && (
+              <span className="text-xs text-gray-500">
+                {filteredRooms.length}件
+              </span>
+            )}
+          </div>
+          <button type="button" onClick={openCreate} className="btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4">
+              <path d="M8.75 3.75a.75.75 0 0 0-1.5 0v3.5h-3.5a.75.75 0 0 0 0 1.5h3.5v3.5a.75.75 0 0 0 1.5 0v-3.5h3.5a.75.75 0 0 0 0-1.5h-3.5v-3.5Z" />
+            </svg>
+            施設を追加
+          </button>
+        </div>
+        <RoomList
+          rooms={filteredRooms}
+          assignments={assignments}
+          onEdit={openEdit}
+          onDelete={handleDelete}
         />
       </div>
     </div>
@@ -564,6 +684,7 @@ function App() {
         {activeTab === 'teachers' && <TeacherSection />}
         {activeTab === 'subjects' && <SubjectSection />}
         {activeTab === 'assignments' && <AssignmentSection />}
+        {activeTab === 'rooms' && <RoomSection />}
         {activeTab === 'schedule' && (
           <Suspense fallback={<LoadingSpinner message="時間割モジュールを読み込み中..." />}>
             <ScheduleTab classOptions={classOptions} settings={settings} />
