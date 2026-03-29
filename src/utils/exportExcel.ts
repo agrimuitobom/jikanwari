@@ -89,6 +89,7 @@ export function exportToExcel(
   }
 
   // --- 教員別シート ---
+  const usedSheetNames = new Set(wb.SheetNames)
   for (const teacher of teachers) {
     const teacherEntries = entries.filter((e) => {
       const a = assignmentMap.get(e.assignmentId)
@@ -121,12 +122,12 @@ export function exportToExcel(
 
     // シート名は31文字制限・重複回避
     let sheetName = teacher.name.slice(0, 28)
-    const existingNames = new Set(wb.SheetNames)
-    if (existingNames.has(sheetName)) {
+    if (usedSheetNames.has(sheetName)) {
       let suffix = 2
-      while (existingNames.has(`${sheetName}_${suffix}`)) suffix++
-      sheetName = `${sheetName}_${suffix}`
+      while (usedSheetNames.has(`${sheetName}(${suffix})`)) suffix++
+      sheetName = `${sheetName}(${suffix})`
     }
+    usedSheetNames.add(sheetName)
     XLSX.utils.book_append_sheet(wb, ws, sheetName)
   }
 
