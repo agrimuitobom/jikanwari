@@ -113,6 +113,8 @@ interface BoardState {
   classDaySubjectCount: Map<string, number>
   /** [day:teacherId] => 配置コマ数（教員の日別負荷管理用） */
   teacherDayCount: Map<string, number>
+  /** [day:classId] => 配置コマ数（クラスの曜日バランス管理用） */
+  classDayCount: Map<string, number>
 }
 
 /** 配置記録（修復フェーズでの追跡用） */
@@ -285,6 +287,10 @@ function teacherDayKey(day: DayOfWeek, teacherId: string): string {
   return `${day}:${teacherId}`
 }
 
+function classDayKey(day: DayOfWeek, classId: string): string {
+  return `${day}:${classId}`
+}
+
 /** 推奨時限に合致しているかチェック */
 function isInPreferredPeriod(subject: Subject, period: Period): boolean {
   if (!subject.preferredPeriods) return true
@@ -355,6 +361,7 @@ function createEmptyState(): BoardState {
     assignmentPlacedCount: new Map(),
     classDaySubjectCount: new Map(),
     teacherDayCount: new Map(),
+    classDayCount: new Map(),
   }
 }
 
@@ -799,6 +806,7 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
     const assignment = task.assignments[i]
     const subject = task.subjects[i]
     const teachers = task.teacherGroups[i]
+    const slotsUsed = task.isConsecutive ? 2 : 1
 
     // 推奨時限に合致すれば加点
     if (subject.preferredPeriods) {
@@ -820,20 +828,62 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
       }
     }
 
-    // ソフト制約: spreadDays — 隣接曜日に同科目がある場合は減点
+    // ソフト制約: spreadDays — 隣接曜日に同科目がある場合は強めに減点
     if (subject.spreadDays) {
       const dayIdx = DAYS.indexOf(slot.day)
       for (const adjDay of [DAYS[dayIdx - 1], DAYS[dayIdx + 1]]) {
         if (!adjDay) continue
         const adjCdsKey = classDaySubjectKey(adjDay, assignment.classId, subject.id)
         if ((state.classDaySubjectCount.get(adjCdsKey) ?? 0) > 0) {
-          score -= 15
+          score -= 30
+        }
+      }
+      // 2日以上離れた曜日に同科目がある場合はボーナス（より広い分散を評価）
+      const sameDayCount = state.classDaySubjectCount.get(classDaySubjectKey(slot.day, assignment.classId, subject.id)) ?? 0
+      if (sameDayCount === 0) {
+        // この曜日にまだ同科目がない → 分散にプラス
+        let hasDistantSameSubject = false
+        for (let d = 0; d < DAYS.length; d++) {
+          if (Math.abs(d - dayIdx) >= 2) {
+            const dKey = classDaySubjectKey(DAYS[d], assignment.classId, subject.id)
+            if ((state.classDaySubjectCount.get(dKey) ?? 0) > 0) {
+              hasDistantSameSubject = true
+              break
+            }
+          }
+        }
+        if (hasDistantSameSubject) {
+          score += 8
         }
       }
     }
 
+    // ソフト制約: 全科目共通の曜日分散 — 同日に同科目が既にある場合は軽く減点
+    // （spreadDays未設定の科目でも同日集中は避けたい）
+    if (!subject.spreadDays) {
+      const sameDayCdsKey = classDaySubjectKey(slot.day, assignment.classId, subject.id)
+      const sameDayCount = state.classDaySubjectCount.get(sameDayCdsKey) ?? 0
+      if (sameDayCount > 0) {
+        score -= 8
+      }
+    }
+
+    // ソフト制約: クラスの曜日バランス — コマが多い日に追加するほど減点
+    const cdKey = classDayKey(slot.day, assignment.classId)
+    const currentClassDayLoad = state.classDayCount.get(cdKey) ?? 0
+    // 全曜日の平均を概算（現在の合計コマ数 / 曜日数）で比較
+    let totalClassSlots = 0
+    for (const day of DAYS) {
+      totalClassSlots += state.classDayCount.get(classDayKey(day, assignment.classId)) ?? 0
+    }
+    const avgLoad = totalClassSlots / DAYS.length
+    const newLoad = currentClassDayLoad + slotsUsed
+    // 平均を超えている分だけペナルティ（1コマ超過ごとに-5）
+    if (newLoad > avgLoad + 1) {
+      score -= Math.round((newLoad - avgLoad - 1) * 5)
+    }
+
     // ソフト制約: 教員の1日あたりコマ数がMAXを超えそうなら減点
-    const slotsUsed = task.isConsecutive ? 2 : 1
     for (const teacher of teachers) {
       const tdKey = teacherDayKey(slot.day, teacher.id)
       const currentLoad = state.teacherDayCount.get(tdKey) ?? 0
@@ -1010,6 +1060,10 @@ function placeTask(
       const cdsKey = classDaySubjectKey(day, classId, subject.id)
       state.classDaySubjectCount.set(cdsKey, (state.classDaySubjectCount.get(cdsKey) ?? 0) + 1)
 
+      // クラスの曜日別コマ数を加算
+      const cdKey = classDayKey(day, classId)
+      state.classDayCount.set(cdKey, (state.classDayCount.get(cdKey) ?? 0) + 1)
+
       // 割当ごとの配置コマ数を加算
       state.assignmentPlacedCount.set(
         assignment.id,
@@ -1071,6 +1125,15 @@ function removeEntries(
       state.classDaySubjectCount.delete(cdsKey)
     } else {
       state.classDaySubjectCount.set(cdsKey, cdsCount - 1)
+    }
+
+    // クラスの曜日別コマ数を減算
+    const cdKey = classDayKey(entry.day, entry.classId)
+    const cdCount = state.classDayCount.get(cdKey) ?? 0
+    if (cdCount <= 1) {
+      state.classDayCount.delete(cdKey)
+    } else {
+      state.classDayCount.set(cdKey, cdCount - 1)
     }
 
     // 割当ごとの配置コマ数を減算
@@ -1143,7 +1206,7 @@ function calculateScore(
   }
   score -= Math.min(overload * 20, 100)
 
-  // ソフト制約ペナルティ: spreadDays違反（最大 -50点）
+  // ソフト制約ペナルティ: spreadDays違反（最大 -100点）
   // 隣接曜日に同科目が配置されている場合に減点
   let spreadViolations = 0
   const classDaySubjects = new Map<string, Set<string>>()
@@ -1165,7 +1228,49 @@ function calculateScore(
       }
     }
   }
-  score -= Math.min(spreadViolations * 10, 50)
+  score -= Math.min(spreadViolations * 20, 100)
+
+  // ソフト制約ペナルティ: 全科目の同日集中（最大 -60点）
+  // spreadDays未設定でも同日に同科目が2コマ以上あればペナルティ
+  let sameDayViolations = 0
+  const allClassDaySubjects = new Map<string, number>()
+  for (const entry of entries) {
+    if (entry.isConsecutiveSecond) continue
+    const assignment = assignmentMap.get(entry.assignmentId)
+    if (!assignment) continue
+    const key = `${entry.day}:${entry.classId}:${assignment.subjectId}`
+    allClassDaySubjects.set(key, (allClassDaySubjects.get(key) ?? 0) + 1)
+  }
+  for (const count of allClassDaySubjects.values()) {
+    if (count > 1) {
+      sameDayViolations += count - 1
+    }
+  }
+  score -= Math.min(sameDayViolations * 5, 60)
+
+  // ソフト制約ペナルティ: クラスの曜日バランス（最大 -80点）
+  // 各クラスの1日あたりコマ数の標準偏差に基づく
+  const classDayCounts = new Map<string, number[]>()
+  for (const entry of entries) {
+    const classId = entry.classId
+    if (!classDayCounts.has(classId)) {
+      classDayCounts.set(classId, new Array(DAYS.length).fill(0))
+    }
+    const dayIdx = DAYS.indexOf(entry.day as DayOfWeek)
+    if (dayIdx >= 0) {
+      classDayCounts.get(classId)![dayIdx]++
+    }
+  }
+  let totalImbalance = 0
+  for (const counts of classDayCounts.values()) {
+    const avg = counts.reduce((a, b) => a + b, 0) / counts.length
+    const variance = counts.reduce((sum, c) => sum + (c - avg) ** 2, 0) / counts.length
+    totalImbalance += Math.sqrt(variance)
+  }
+  const classCount = classDayCounts.size || 1
+  const avgImbalance = totalImbalance / classCount
+  // 標準偏差1.0以上で減点開始、最大-80点
+  score -= Math.min(Math.max(avgImbalance - 1.0, 0) * 40, 80)
 
   return Math.round(score)
 }
@@ -1641,6 +1746,7 @@ function saveState(
     assignmentPlacedCount: new Map(state.assignmentPlacedCount),
     classDaySubjectCount: new Map(state.classDaySubjectCount),
     teacherDayCount: new Map(state.teacherDayCount),
+    classDayCount: new Map(state.classDayCount),
     pm: new Map(placementMap),
   }
 }
