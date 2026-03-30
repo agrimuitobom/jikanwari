@@ -869,18 +869,26 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
     }
 
     // ソフト制約: クラスの曜日バランス — コマが多い日に追加するほど減点
+    // 閾値ベースで軽量に判定（1日6コマが標準的な上限）
     const cdKey = classDayKey(slot.day, assignment.classId)
     const currentClassDayLoad = state.classDayCount.get(cdKey) ?? 0
-    // 全曜日の平均を概算（現在の合計コマ数 / 曜日数）で比較
-    let totalClassSlots = 0
-    for (const day of DAYS) {
-      totalClassSlots += state.classDayCount.get(classDayKey(day, assignment.classId)) ?? 0
-    }
-    const avgLoad = totalClassSlots / DAYS.length
     const newLoad = currentClassDayLoad + slotsUsed
-    // 平均を超えている分だけペナルティ（1コマ超過ごとに-5）
-    if (newLoad > avgLoad + 1) {
-      score -= Math.round((newLoad - avgLoad - 1) * 5)
+    // 5コマ以上の日にさらに追加するとペナルティ（偏りを抑制）
+    if (newLoad > 5) {
+      score -= (newLoad - 5) * 5
+    }
+    // 既に他の曜日より2コマ以上多い場合は追加ペナルティ
+    if (currentClassDayLoad >= 2) {
+      // 最少の曜日と比較（隣接2曜日だけ軽量チェック）
+      const dayIdx = DAYS.indexOf(slot.day)
+      for (const adjDay of [DAYS[dayIdx - 1], DAYS[dayIdx + 1]]) {
+        if (!adjDay) continue
+        const adjLoad = state.classDayCount.get(classDayKey(adjDay, assignment.classId)) ?? 0
+        if (currentClassDayLoad - adjLoad >= 2) {
+          score -= 3
+          break
+        }
+      }
     }
 
     // ソフト制約: 教員の1日あたりコマ数がMAXを超えそうなら減点
@@ -959,7 +967,7 @@ function scoreCandidateSlotWithLCV(
  * 大規模データ時に全タスクの候補数を計算するコストを抑制するため、
  * 先頭の最大 MRV_SAMPLE_LIMIT 件 + 固定スロットタスクのみを評価する。
  */
-const MRV_SAMPLE_LIMIT = 30
+const MRV_SAMPLE_LIMIT = 60
 
 function selectNextTaskMRV(
   remainingTasks: ScheduleTask[],
@@ -974,14 +982,14 @@ function selectNextTaskMRV(
   for (let i = 0; i < remainingTasks.length; i++) {
     const task = remainingTasks[i]
 
-    // 固定スロットタスクは最優先（常にチェック）
+    // 固定スロット/固定曜日タスクは常にチェック（サンプリング制限外）
     if (task.fixedSlot) {
       const candidates = getCandidateSlots(task, state)
       return { index: i, candidates }
     }
 
-    // サンプリング上限を超えたら打ち切り
-    if (i >= limit) continue
+    // 固定曜日タスクはサンプリング外でも評価する
+    if (i >= limit && !task.fixedDay) continue
 
     const candidates = getCandidateSlots(task, state)
     if (candidates.length < bestCount) {
