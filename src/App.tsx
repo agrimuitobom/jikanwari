@@ -591,12 +591,14 @@ function ScheduleTab({ classOptions, settings }: { classOptions: import('./utils
   const { teachers } = useTeachers()
   const { subjects } = useSubjects()
   const { assignments } = useAssignments()
+  const { rooms } = useRooms()
 
   return (
     <ScheduleViewContainer
       teachers={teachers}
       subjects={subjects}
       assignments={assignments}
+      rooms={rooms}
       classOptions={classOptions}
       schedulerOptions={{
         maxTeacherPeriodsPerDay: settings.maxTeacherPeriodsPerDay,

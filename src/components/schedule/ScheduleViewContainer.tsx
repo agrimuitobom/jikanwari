@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react'
-import type { DayOfWeek, Period, Teacher, Subject, Assignment, ScheduleEntry, TimeSlot } from '../../types'
+import type { DayOfWeek, Period, Teacher, Subject, Assignment, Room, ScheduleEntry, TimeSlot } from '../../types'
 import { CLASS_OPTIONS } from '../../utils/constants'
 import type { ClassOption } from '../../utils/constants'
 import { runSchedulerInWorker } from '../../utils/runSchedulerWorker'
@@ -22,6 +22,7 @@ export interface ScheduleViewContainerProps {
   teachers: Teacher[]
   subjects: Subject[]
   assignments: Assignment[]
+  rooms?: Room[]
   classOptions?: ClassOption[]
   schedulerOptions?: SchedulerOptions
 }
@@ -133,6 +134,7 @@ export function ScheduleViewContainer({
   teachers,
   subjects,
   assignments,
+  rooms = [],
   classOptions = CLASS_OPTIONS,
   schedulerOptions,
 }: ScheduleViewContainerProps) {
@@ -185,8 +187,8 @@ export function ScheduleViewContainer({
 
   // ---- 制約矛盾事前検出 ----
   const constraintWarnings = useMemo<ConstraintWarning[]>(
-    () => (assignments.length > 0 ? detectConstraintConflicts(teachers, subjects, assignments) : []),
-    [teachers, subjects, assignments],
+    () => (assignments.length > 0 ? detectConstraintConflicts(teachers, subjects, assignments, rooms) : []),
+    [teachers, subjects, assignments, rooms],
   )
   const [warningsDismissed, setWarningsDismissed] = useState(false)
 
