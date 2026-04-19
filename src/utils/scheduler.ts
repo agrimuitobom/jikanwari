@@ -969,6 +969,50 @@ function scoreCandidateSlotWithLCV(
  */
 const MRV_SAMPLE_LIMIT = 60
 
+// サンプリング外でも候補数がこの値以下のタスクは「ボトルネック」として救済対象にする。
+// getCandidateSlotsBounded による早期終了で走査コストを ceiling+1 回程度に抑える。
+const MRV_BOTTLENECK_CEILING = 5
+
+/**
+ * 候補スロットを bounded に収集する（早期終了付き）。
+ * 候補数が ceiling を超えた時点で null を返し、以降の走査を打ち切る。
+ * これにより「ボトルネックでないタスク」のコストを O(ceiling) に抑える。
+ */
+function getCandidateSlotsBounded(
+  task: ScheduleTask,
+  state: BoardState,
+  ceiling: number,
+): Slot[] | null {
+  if (task.fixedSlot) {
+    return getCandidateSlots(task, state)
+  }
+
+  const allowedDays = task.fixedDay ? [task.fixedDay] : DAYS
+  const candidates: Slot[] = []
+  for (const day of allowedDays) {
+    if (task.isConsecutive) {
+      for (const startPeriod of CONSECUTIVE_STARTS) {
+        const endPeriod = (startPeriod + 1) as Period
+        if (
+          canPlaceTask(task, state, day, startPeriod) &&
+          canPlaceTask(task, state, day, endPeriod)
+        ) {
+          candidates.push({ day, period: startPeriod })
+          if (candidates.length > ceiling) return null
+        }
+      }
+    } else {
+      for (const period of PERIODS) {
+        if (canPlaceTask(task, state, day, period)) {
+          candidates.push({ day, period })
+          if (candidates.length > ceiling) return null
+        }
+      }
+    }
+  }
+  return candidates
+}
+
 function selectNextTaskMRV(
   remainingTasks: ScheduleTask[],
   state: BoardState,
@@ -998,6 +1042,26 @@ function selectNextTaskMRV(
       bestCandidates = candidates
       // 候補が0なら即座に返す
       if (bestCount === 0) break
+    }
+  }
+
+  // サンプリング外のタスクでも、候補数が極端に少ないボトルネックは救済する。
+  // 早期終了付きカウント（ceiling 超過で打ち切り）でコストを抑える。
+  if (bestCount > 0 && remainingTasks.length > limit) {
+    const ceiling = Math.min(bestCount - 1, MRV_BOTTLENECK_CEILING)
+    if (ceiling >= 0) {
+      for (let i = limit; i < remainingTasks.length; i++) {
+        const task = remainingTasks[i]
+        // サンプリング内でチェック済みのケース（fixedDay）はスキップ
+        if (task.fixedDay) continue
+        const candidates = getCandidateSlotsBounded(task, state, ceiling)
+        if (candidates !== null && candidates.length < bestCount) {
+          bestCount = candidates.length
+          bestIndex = i
+          bestCandidates = candidates
+          if (bestCount === 0) break
+        }
+      }
     }
   }
 
