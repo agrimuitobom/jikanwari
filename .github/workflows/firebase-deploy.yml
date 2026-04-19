@@ -3,7 +3,7 @@ name: Deploy to Firebase Hosting (Production)
 on:
   push:
     branches:
-      - main
+      - claude/init-schedule-app-JtnmT
   workflow_dispatch:
 
 jobs:
