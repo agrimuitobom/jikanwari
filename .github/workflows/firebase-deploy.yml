@@ -1,10 +1,10 @@
-name: Deploy to Firebase Hosting
+name: Deploy to Firebase Hosting (Production)
 
 on:
   push:
     branches:
-      - main
       - claude/init-schedule-app-JtnmT
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:

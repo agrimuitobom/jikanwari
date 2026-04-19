@@ -14,6 +14,12 @@ service cloud.firestore {
     match /teachers/{docId} {
       allow read, write: if isAuthenticated();
     }
+    match /classes/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+    match /rooms/{docId} {
+      allow read, write: if isAuthenticated();
+    }
     match /assignments/{docId} {
       allow read, write: if isAuthenticated();
     }
@@ -22,6 +28,11 @@ service cloud.firestore {
     }
     match /scheduleEntries/{docId} {
       allow read, write: if isAuthenticated();
+    }
+
+    // 上記以外のドキュメントは明示的に拒否
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
