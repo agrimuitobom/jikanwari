@@ -1,5 +1,5 @@
 import type { SchedulerProgress, SchedulerResult, SchedulerOptions } from './scheduler'
-import type { Teacher, Subject, Assignment } from '../types'
+import type { Teacher, Subject, Assignment, Room } from '../types'
 import type { WorkerMessage, WorkerResponse } from './scheduler.worker'
 
 /**
@@ -12,6 +12,7 @@ export function runSchedulerInWorker(
   assignments: Assignment[],
   onProgress?: (progress: SchedulerProgress) => void,
   options?: SchedulerOptions,
+  rooms?: Room[],
 ): Promise<SchedulerResult> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(
@@ -41,7 +42,7 @@ export function runSchedulerInWorker(
       worker.terminate()
     }
 
-    const message: WorkerMessage = { type: 'start', teachers, subjects, assignments, options }
+    const message: WorkerMessage = { type: 'start', teachers, subjects, assignments, options, rooms }
     worker.postMessage(message)
   })
 }

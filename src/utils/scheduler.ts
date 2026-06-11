@@ -1357,6 +1357,7 @@ function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask[]
   for (let i = 0; i < task.assignments.length; i++) {
     const assignment = task.assignments[i]
     const teachers = task.teacherGroups[i]
+    const room = task.rooms[i]
     const isConsecutive = task.isConsecutive
     const reasons: string[] = []
 
@@ -1384,6 +1385,13 @@ function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask[]
             fixedBlockReasons.push(`${teacher.name}の${dayLabel}${p}限に別授業あり`)
           }
         }
+        if (room) {
+          if (!isRoomAvailable(room, day, p)) {
+            fixedBlockReasons.push(`${room.name}が${dayLabel}${p}限に利用不可`)
+          } else if (!isSlotFreeForRoom(state, day, p, room.id)) {
+            fixedBlockReasons.push(`${room.name}が${dayLabel}${p}限に使用中`)
+          }
+        }
       }
 
       if (fixedBlockReasons.length > 0) {
@@ -1407,6 +1415,7 @@ function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask[]
     let classConflicts = 0
     let teacherUnavailable = 0
     let teacherConflicts = 0
+    let roomBlocked = 0
     const unavailableTeachers = new Set<string>()
     const conflictingTeachers = new Set<string>()
 
@@ -1421,6 +1430,7 @@ function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask[]
         let blockedByClass = false
         let blockedByTeacherAvail = false
         let blockedByTeacherConflict = false
+        let blockedByRoom = false
 
         for (const p of checkPeriods) {
           if (!isSlotFreeForClass(state, day, p, assignment.classId)) {
@@ -1435,11 +1445,15 @@ function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask[]
               conflictingTeachers.add(teacher.name)
             }
           }
+          if (room && (!isRoomAvailable(room, day, p) || !isSlotFreeForRoom(state, day, p, room.id))) {
+            blockedByRoom = true
+          }
         }
 
         if (blockedByClass) classConflicts++
         if (blockedByTeacherAvail) teacherUnavailable++
         if (blockedByTeacherConflict) teacherConflicts++
+        if (blockedByRoom) roomBlocked++
       }
     }
 
@@ -1457,6 +1471,10 @@ function diagnoseUnplaced(task: ScheduleTask, state: BoardState): UnplacedTask[]
     if (teacherConflicts > 0) {
       const names = Array.from(conflictingTeachers).join('・')
       reasons.push(`${names}の他授業との重複で${teacherConflicts}/${totalSlots}コマ不可`)
+    }
+
+    if (room && roomBlocked > 0) {
+      reasons.push(`${room.name}の利用不可・他授業での使用により${roomBlocked}/${totalSlots}コマ不可`)
     }
 
     if (isConsecutive) {
@@ -1836,6 +1854,7 @@ function loadState(
   state.assignmentPlacedCount = saved.assignmentPlacedCount
   state.classDaySubjectCount = saved.classDaySubjectCount
   state.teacherDayCount = saved.teacherDayCount
+  state.classDayCount = saved.classDayCount
   placementMap.clear()
   for (const [k, v] of saved.pm) {
     placementMap.set(k, v)
@@ -1949,12 +1968,15 @@ function tryRelocateTask(
         const a = task.assignments[i]
         const s = task.subjects[i]
         const ts = task.teacherGroups[i]
+        const room = task.rooms[i]
 
         const pc = state.assignmentPlacedCount.get(a.id) ?? 0
         if (pc >= a.weeklyCount) { hardBlock = true; break }
 
         for (const p of checkPeriods) {
           if (isExcludedPeriodForSubject(s, p)) { hardBlock = true; break }
+          // 施設自体が利用不可の曜日・時限は置換では解決できない
+          if (room && !isRoomAvailable(room, day, p)) { hardBlock = true; break }
           for (const t of ts) {
             if (!isTeacherAvailable(t, day, p)) { hardBlock = true; break }
           }
@@ -1970,6 +1992,7 @@ function tryRelocateTask(
       for (let i = 0; i < task.assignments.length && !blockerHardBlock; i++) {
         const a = task.assignments[i]
         const ts = task.teacherGroups[i]
+        const room = task.rooms[i]
 
         for (const p of checkPeriods) {
           // クラス競合
@@ -2020,6 +2043,33 @@ function tryRelocateTask(
             }
           }
           if (blockerHardBlock) break
+          // 施設競合
+          if (room && !isSlotFreeForRoom(state, day, p, room.id)) {
+            const blockAId = state.roomGrid.get(cellKey(day, p, room.id))
+            if (blockAId) {
+              const blockAssignment = assignmentMap.get(blockAId)
+              if (blockAssignment) {
+                const rec = placementMap.get(cellKey(day, p, blockAssignment.classId))
+                if (rec) {
+                  if (excludedTasks.has(rec.task)) {
+                    blockerHardBlock = true; break
+                  }
+                  if (rec.task.fixedSlot) {
+                    if (task.fixedSlot && taskFixedSlotCovers(task, day, p)) {
+                      blockerRecords.add(rec)
+                    } else {
+                      blockerHardBlock = true; break
+                    }
+                  } else {
+                    blockerRecords.add(rec)
+                  }
+                } else {
+                  // ロック済みエントリ等、placementMapに記録がない占有は排除できない
+                  blockerHardBlock = true; break
+                }
+              }
+            }
+          }
         }
       }
 
@@ -2118,6 +2168,11 @@ function prePlaceLockedEntries(
       state.teacherDayCount.set(tdKey, (state.teacherDayCount.get(tdKey) ?? 0) + 1)
     }
 
+    // ロック済みエントリの施設使用を登録（同施設への二重配置を防止）
+    if (assignment.roomId) {
+      state.roomGrid.set(cellKey(entry.day, entry.period, assignment.roomId), entry.assignmentId)
+    }
+
     state.assignmentPlacedCount.set(
       entry.assignmentId,
       (state.assignmentPlacedCount.get(entry.assignmentId) ?? 0) + 1,
@@ -2127,6 +2182,9 @@ function prePlaceLockedEntries(
       const cdsKey = classDaySubjectKey(entry.day, entry.classId, subject.id)
       state.classDaySubjectCount.set(cdsKey, (state.classDaySubjectCount.get(cdsKey) ?? 0) + 1)
     }
+
+    const cdKey = classDayKey(entry.day, entry.classId)
+    state.classDayCount.set(cdKey, (state.classDayCount.get(cdKey) ?? 0) + 1)
 
     state.entries.push({ ...entry })
   }
@@ -2156,6 +2214,7 @@ function generatePlacementSuggestions(
     const assignment = task.assignments[ai]
     const subject = task.subjects[ai]
     const teachers = task.teacherGroups[ai]
+    const room = task.rooms[ai]
 
     const pc = state.assignmentPlacedCount.get(assignment.id) ?? 0
     if (pc >= assignment.weeklyCount) continue
@@ -2197,6 +2256,16 @@ function generatePlacementSuggestions(
                 const classLabel = blockA ? getClassLabel(blockA.classId) : ''
                 blockers.push(`${teacher.name}の${DAY_LABELS[day]}${p}限（${classLabel} ${blockS?.name ?? ''}）を移動`)
               }
+            }
+          }
+
+          if (room) {
+            if (!isRoomAvailable(room, day, p)) { hardBlocked = true; break }
+            if (!isSlotFreeForRoom(state, day, p, room.id)) {
+              const blockAid = state.roomGrid.get(cellKey(day, p, room.id))
+              const blockA = blockAid ? assignmentMap.get(blockAid) : undefined
+              const blockS = blockA ? subjectMap.get(blockA.subjectId) : null
+              blockers.push(`${room.name}の${DAY_LABELS[day]}${p}限（${blockS?.name ?? '授業'}）を移動`)
             }
           }
 
@@ -2254,6 +2323,7 @@ function generateFixedSlotSuggestions(
   for (let ai = 0; ai < task.assignments.length; ai++) {
     const assignment = task.assignments[ai]
     const teachers = task.teacherGroups[ai]
+    const room = task.rooms[ai]
 
     for (const p of checkPeriods) {
       // クラス競合: 固定先にある別の授業を特定
@@ -2297,6 +2367,27 @@ function generateFixedSlotSuggestions(
                 `${teacher.name}の${dayLabel}${p}限（${classLabel} ${blockS?.name ?? ''}）を移動`
               )
             }
+          }
+        }
+      }
+
+      // 施設競合: 固定先で施設を使用している授業を特定
+      if (room && isRoomAvailable(room, day, p) && !isSlotFreeForRoom(state, day, p, room.id)) {
+        const blockAid = state.roomGrid.get(cellKey(day, p, room.id))
+        if (blockAid) {
+          const blockA = assignmentMap.get(blockAid)
+          const blockS = blockA ? subjectMap.get(blockA.subjectId) : null
+          const classLabel = blockA ? getClassLabel(blockA.classId) : ''
+
+          const moveTarget = findMoveTargetForBlocker(blockAid, state, assignmentMap, subjectMap)
+          if (moveTarget) {
+            suggestions.push(
+              `${room.name}を使用中の${dayLabel}${p}限（${classLabel} ${blockS?.name ?? ''}）を${moveTarget}に移動`
+            )
+          } else {
+            suggestions.push(
+              `${room.name}を使用中の${dayLabel}${p}限（${classLabel} ${blockS?.name ?? ''}）を移動`
+            )
           }
         }
       }
@@ -2758,8 +2849,10 @@ export async function runScheduler(
   subjects: Subject[],
   assignments: Assignment[],
   onProgress?: (progress: SchedulerProgress) => void,
+  options?: SchedulerOptions,
+  rooms?: Room[],
 ): Promise<SchedulerResult> {
-  const gen = generateSchedule(teachers, subjects, assignments)
+  const gen = generateSchedule(teachers, subjects, assignments, options, rooms)
   let result = gen.next()
 
   while (!result.done) {

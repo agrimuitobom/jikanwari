@@ -1,9 +1,9 @@
 import { generateSchedule } from './scheduler'
 import type { SchedulerProgress, SchedulerResult, SchedulerOptions } from './scheduler'
-import type { Teacher, Subject, Assignment } from '../types'
+import type { Teacher, Subject, Assignment, Room } from '../types'
 
 export type WorkerMessage =
-  | { type: 'start'; teachers: Teacher[]; subjects: Subject[]; assignments: Assignment[]; options?: SchedulerOptions }
+  | { type: 'start'; teachers: Teacher[]; subjects: Subject[]; assignments: Assignment[]; options?: SchedulerOptions; rooms?: Room[] }
 
 export type WorkerResponse =
   | { type: 'progress'; data: SchedulerProgress }
@@ -14,8 +14,8 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
   if (e.data.type !== 'start') return
 
   try {
-    const { teachers, subjects, assignments, options } = e.data
-    const gen = generateSchedule(teachers, subjects, assignments, options)
+    const { teachers, subjects, assignments, options, rooms } = e.data
+    const gen = generateSchedule(teachers, subjects, assignments, options, rooms)
     let result = gen.next()
 
     while (!result.done) {

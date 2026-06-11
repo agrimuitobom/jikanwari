@@ -232,7 +232,7 @@ export function ScheduleViewContainer({
     try {
       const res = await runSchedulerInWorker(teachers, subjects, assignments, (p) => {
         setProgress(p)
-      }, schedulerOptions)
+      }, schedulerOptions, rooms)
       setEntries(res.entries)
       setUnplacedTasks(res.unplacedTasks)
       setResult(res)
@@ -248,7 +248,7 @@ export function ScheduleViewContainer({
     } finally {
       setIsRunning(false)
     }
-  }, [teachers, subjects, assignments, schedulerOptions, schedules, saveSchedule])
+  }, [teachers, subjects, assignments, rooms, schedulerOptions, schedules, saveSchedule])
 
   // ---- 部分再生成（手動配置済みを固定して残りだけ再生成） ----
   const handlePartialRegenerate = useCallback(async () => {
@@ -261,7 +261,7 @@ export function ScheduleViewContainer({
     try {
       const res = await runSchedulerInWorker(teachers, subjects, assignments, (p) => {
         setProgress(p)
-      }, { ...schedulerOptions, lockedEntries: entries })
+      }, { ...schedulerOptions, lockedEntries: entries }, rooms)
 
       setEntries(res.entries)
       setUnplacedTasks(res.unplacedTasks)
@@ -278,7 +278,7 @@ export function ScheduleViewContainer({
     } finally {
       setIsRunning(false)
     }
-  }, [teachers, subjects, assignments, entries, schedulerOptions, schedules.length, saveSchedule])
+  }, [teachers, subjects, assignments, rooms, entries, schedulerOptions, schedules.length, saveSchedule])
 
   // ---- 保存済みスケジュールの復元 ----
   const handleRestoreSchedule = useCallback((scheduleId: string) => {

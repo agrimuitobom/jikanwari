@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { generateSchedule } from './scheduler'
-import type { Teacher, Subject, Assignment, DayOfWeek, Period } from '../types'
+import type { SchedulerOptions } from './scheduler'
+import type { Teacher, Subject, Assignment, Room, ScheduleEntry, DayOfWeek, Period } from '../types'
 
 // ============================================================
 // テストヘルパー
@@ -53,13 +54,25 @@ function makeAssignment(overrides: Partial<Assignment> = {}): Assignment {
   }
 }
 
+function makeRoom(overrides: Partial<Room> = {}): Room {
+  return {
+    id: uid(),
+    name: '調理実習室',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  }
+}
+
 /** ジェネレータを最後まで回して結果を返す */
 function runGenerator(
   teachers: Teacher[],
   subjects: Subject[],
   assignments: Assignment[],
+  options?: SchedulerOptions,
+  rooms?: Room[],
 ) {
-  const gen = generateSchedule(teachers, subjects, assignments)
+  const gen = generateSchedule(teachers, subjects, assignments, options, rooms)
   let result = gen.next()
   while (!result.done) {
     result = gen.next()
@@ -983,6 +996,105 @@ describe('scheduler', () => {
       const wednesdayEntries = entries.filter((e) => e.day === 'wednesday')
       expect(mondayEntries.length).toBeGreaterThanOrEqual(1)
       expect(wednesdayEntries.length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  describe('施設（教室）制約', () => {
+    it('同じ施設を使う授業が同じ曜日・時限に重複しない', () => {
+      const room = makeRoom()
+      const t1 = makeTeacher({ name: '教員1' })
+      const t2 = makeTeacher({ name: '教員2' })
+      const s1 = makeSubject({ name: '調理A', weeklyFrequency: 5 })
+      const s2 = makeSubject({ name: '調理B', weeklyFrequency: 5 })
+      const a1 = makeAssignment({
+        classId: 'grade1-class1',
+        subjectId: s1.id,
+        teacherIds: [t1.id],
+        weeklyCount: 5,
+        roomId: room.id,
+      })
+      const a2 = makeAssignment({
+        classId: 'grade1-class2',
+        subjectId: s2.id,
+        teacherIds: [t2.id],
+        weeklyCount: 5,
+        roomId: room.id,
+      })
+
+      const result = runGenerator([t1, t2], [s1, s2], [a1, a2], undefined, [room])
+      expect(result.isComplete).toBe(true)
+
+      // 同一スロットで施設が二重使用されていないこと
+      const roomSlots = result.entries.map((e) => `${e.day}-${e.period}`)
+      expect(new Set(roomSlots).size).toBe(roomSlots.length)
+    })
+
+    it('施設の利用不可曜日には配置されない', () => {
+      const room = makeRoom({ availableDays: ['monday', 'tuesday'] as DayOfWeek[] })
+      const t = makeTeacher()
+      const s = makeSubject({ weeklyFrequency: 2 })
+      const a = makeAssignment({
+        subjectId: s.id,
+        teacherIds: [t.id],
+        weeklyCount: 2,
+        roomId: room.id,
+      })
+
+      const result = runGenerator([t], [s], [a], undefined, [room])
+      expect(result.isComplete).toBe(true)
+      for (const entry of result.entries) {
+        expect(['monday', 'tuesday']).toContain(entry.day)
+      }
+    })
+
+    it('ロック済みエントリの施設使用が再生成時に尊重される', () => {
+      const room = makeRoom()
+      const t1 = makeTeacher({ name: 'ロック側教員' })
+      // 月曜1限しか配置できない教員（火〜金は勤務不可、月曜2〜6限は除外）
+      const t2 = makeTeacher({
+        name: '制約教員',
+        availableDays: ['monday'] as DayOfWeek[],
+        excludedSlots: ([2, 3, 4, 5, 6] as Period[]).map((p) => ({ day: 'monday' as DayOfWeek, period: p })),
+      })
+      const s1 = makeSubject({ name: '実習A', weeklyFrequency: 1 })
+      const s2 = makeSubject({ name: '実習B', weeklyFrequency: 1 })
+      const a1 = makeAssignment({
+        classId: 'grade1-class1',
+        subjectId: s1.id,
+        teacherIds: [t1.id],
+        weeklyCount: 1,
+        roomId: room.id,
+      })
+      const a2 = makeAssignment({
+        classId: 'grade1-class2',
+        subjectId: s2.id,
+        teacherIds: [t2.id],
+        weeklyCount: 1,
+        roomId: room.id,
+      })
+
+      // a1を月曜1限にロック（施設roomを占有）
+      const lockedEntry: ScheduleEntry = {
+        id: 'locked-1',
+        day: 'monday',
+        period: 1,
+        classId: a1.classId,
+        assignmentId: a1.id,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+
+      const result = runGenerator(
+        [t1, t2], [s1, s2], [a1, a2],
+        { lockedEntries: [lockedEntry] },
+        [room],
+      )
+
+      // a2は月曜1限にしか置けないが、施設がロック済みエントリで使用中のため未配置になる
+      const a2Entries = result.entries.filter((e) => e.assignmentId === a2.id)
+      expect(a2Entries).toHaveLength(0)
+      expect(result.isComplete).toBe(false)
+      expect(result.unplacedTasks.some((u) => u.assignmentId === a2.id)).toBe(true)
     })
   })
 })
