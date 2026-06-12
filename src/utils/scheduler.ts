@@ -868,6 +868,21 @@ function scoreCandidateSlot(task: ScheduleTask, slot: Slot, state: BoardState, m
       }
     }
 
+    // ソフト制約: クラスの穴あき回避 — 下の時限が空いたままになる配置は減点し、
+    // 既存授業のすぐ下に詰める（または穴を埋める）配置を加点する
+    let emptyBelow = 0
+    for (let p = 1; p < slot.period; p++) {
+      if (!state.classGrid.has(cellKey(slot.day, p as Period, assignment.classId))) emptyBelow++
+    }
+    score -= emptyBelow * 2
+    const topPeriod = slot.period + slotsUsed - 1
+    for (let p = topPeriod + 1; p <= 6; p++) {
+      if (state.classGrid.has(cellKey(slot.day, p as Period, assignment.classId))) {
+        score += 4
+        break
+      }
+    }
+
     // ソフト制約: クラスの曜日バランス — コマが多い日に追加するほど減点
     // 閾値ベースで軽量に判定（1日6コマが標準的な上限）
     const cdKey = classDayKey(slot.day, assignment.classId)
@@ -1227,7 +1242,7 @@ function removeEntries(
 
 function calculateScore(
   entries: ScheduleEntry[],
-  tasks: ScheduleTask[],
+  unplacedCount: number,
   totalTasks: number,
   subjectMap: Map<string, Subject>,
   assignmentMap: Map<string, Assignment>,
@@ -1235,7 +1250,7 @@ function calculateScore(
   maxTeacherPerDay: number,
 ): number {
   // 基本スコア: 配置率（1000点満点）
-  const placedTasks = totalTasks - tasks.length
+  const placedTasks = totalTasks - unplacedCount
   let score = (placedTasks / Math.max(totalTasks, 1)) * 1000
 
   // 推奨時限ボーナス（最大200点）
@@ -1343,6 +1358,29 @@ function calculateScore(
   const avgImbalance = totalImbalance / classCount
   // 標準偏差1.0以上で減点開始、最大-80点
   score -= Math.min(Math.max(avgImbalance - 1.0, 0) * 40, 80)
+
+  // ソフト制約ペナルティ: クラスの穴あき（最大 -120点）
+  // 同日内で、授業のある時限より下に空き時限がある場合に減点
+  // （1限が空いて2限から始まる場合も穴として扱う）
+  const classDayPeriods = new Map<string, number[]>()
+  for (const entry of entries) {
+    const key = `${entry.classId}:${entry.day}`
+    const list = classDayPeriods.get(key)
+    if (list) {
+      list.push(entry.period)
+    } else {
+      classDayPeriods.set(key, [entry.period])
+    }
+  }
+  let gapCount = 0
+  for (const periods of classDayPeriods.values()) {
+    const filled = new Set(periods)
+    const maxPeriod = Math.max(...periods)
+    for (let p = 1; p < maxPeriod; p++) {
+      if (!filled.has(p)) gapCount++
+    }
+  }
+  score -= Math.min(gapCount * 10, 120)
 
   return Math.round(score)
 }
@@ -2142,6 +2180,178 @@ function tryRelocateTask(
 }
 
 // ============================================================
+// ソフト制約の磨き込み（局所探索）
+// ============================================================
+
+/** 磨き込みフェーズの最大スイープ回数 */
+const POLISH_MAX_SWEEPS = 8
+/** 磨き込みフェーズの最大実行時間（ミリ秒） */
+const POLISH_MAX_MS = 3000
+/** 完全解が見つかった場合に磨き込みへ最低限確保する時間（ミリ秒） */
+const POLISH_MIN_COMPLETE_MS = 1500
+
+/** placementMapから一意なPlacementRecordを収集する */
+function collectUniqueRecords(placementMap: Map<string, PlacementRecord>): PlacementRecord[] {
+  const seen = new Set<PlacementRecord>()
+  const result: PlacementRecord[] = []
+  for (const rec of placementMap.values()) {
+    if (!seen.has(rec)) {
+      seen.add(rec)
+      result.push(rec)
+    }
+  }
+  return result
+}
+
+/**
+ * 2つの配置レコードのスロットを交換する。
+ * 成功（スコア改善）時は新しいスコアを、失敗時はnullを返す。
+ * 失敗時はボード状態が呼び出し前に復元される。
+ */
+function trySwapRecords(
+  recA: PlacementRecord,
+  recB: PlacementRecord,
+  state: BoardState,
+  placementMap: Map<string, PlacementRecord>,
+  evalScore: () => number,
+  currentScore: number,
+): number | null {
+  // 単独と連続ペアはスロット形状が異なるため交換不可
+  if (recA.task.isConsecutive !== recB.task.isConsecutive) return null
+  if (recA.day === recB.day && recA.startPeriod === recB.startPeriod) return null
+  // 固定曜日タスクは交換先が同じ曜日の場合のみ
+  if (recA.task.fixedDay && recA.task.fixedDay !== recB.day) return null
+  if (recB.task.fixedDay && recB.task.fixedDay !== recA.day) return null
+
+  const saved = saveState(state, placementMap)
+  const slotA: Slot = { day: recA.day, period: recA.startPeriod }
+  const slotB: Slot = { day: recB.day, period: recB.startPeriod }
+
+  for (const rec of [recA, recB]) {
+    removeEntries(rec.task, state, rec.entries)
+    for (const e of rec.entries) {
+      placementMap.delete(cellKey(e.day, e.period, e.classId))
+    }
+  }
+
+  const canPlaceAt = (task: ScheduleTask, slot: Slot): boolean =>
+    task.isConsecutive
+      ? canPlaceTask(task, state, slot.day, slot.period) &&
+        canPlaceTask(task, state, slot.day, (slot.period + 1) as Period)
+      : canPlaceTask(task, state, slot.day, slot.period)
+
+  if (!canPlaceAt(recA.task, slotB)) {
+    loadState(state, placementMap, saved)
+    return null
+  }
+  const entriesA = placeTask(recA.task, state, slotB.day, slotB.period)
+
+  if (!canPlaceAt(recB.task, slotA)) {
+    loadState(state, placementMap, saved)
+    return null
+  }
+  const entriesB = placeTask(recB.task, state, slotA.day, slotA.period)
+
+  const score = evalScore()
+  if (score > currentScore) {
+    recA.entries = entriesA
+    recA.day = slotB.day
+    recA.startPeriod = slotB.period
+    recB.entries = entriesB
+    recB.day = slotA.day
+    recB.startPeriod = slotA.period
+    for (const e of entriesA) placementMap.set(cellKey(e.day, e.period, e.classId), recA)
+    for (const e of entriesB) placementMap.set(cellKey(e.day, e.period, e.classId), recB)
+    return score
+  }
+
+  loadState(state, placementMap, saved)
+  return null
+}
+
+/**
+ * ソフト制約の磨き込みフェーズ。
+ * ハード制約を維持したまま、配置済みタスクの「移動」と「交換」の山登り法で
+ * ソフト制約スコア（推奨時限・曜日分散・穴あき・教員負荷）を改善する。
+ * 固定スロットのタスクとロック済みエントリは動かさない。
+ *
+ * @returns 改善後のスコア
+ */
+function polishSoftConstraints(
+  state: BoardState,
+  placementMap: Map<string, PlacementRecord>,
+  unplacedCount: number,
+  totalTasks: number,
+  subjectMap: Map<string, Subject>,
+  assignmentMap: Map<string, Assignment>,
+  teacherMap: Map<string, Teacher>,
+  maxTeacherPerDay: number,
+  deadline: number,
+): number {
+  const evalScore = () =>
+    calculateScore(state.entries, unplacedCount, totalTasks, subjectMap, assignmentMap, teacherMap, maxTeacherPerDay)
+
+  let bestScore = evalScore()
+
+  for (let sweep = 0; sweep < POLISH_MAX_SWEEPS; sweep++) {
+    let improved = false
+    const records = collectUniqueRecords(placementMap).filter((r) => !r.task.fixedSlot)
+    if (records.length === 0) break
+
+    // 移動: 各タスクを一旦外し、より良い空きスロットがあれば移す
+    for (const rec of shuffleArray(records)) {
+      if (Date.now() > deadline) return bestScore
+
+      removeEntries(rec.task, state, rec.entries)
+      for (const e of rec.entries) {
+        placementMap.delete(cellKey(e.day, e.period, e.classId))
+      }
+
+      const original: Slot = { day: rec.day, period: rec.startPeriod }
+      let bestSlot = original
+      for (const cand of getCandidateSlots(rec.task, state)) {
+        if (cand.day === original.day && cand.period === original.period) continue
+        const candEntries = placeTask(rec.task, state, cand.day, cand.period)
+        const score = evalScore()
+        removeEntries(rec.task, state, candEntries)
+        if (score > bestScore) {
+          bestScore = score
+          bestSlot = cand
+        }
+      }
+
+      const newEntries = placeTask(rec.task, state, bestSlot.day, bestSlot.period)
+      rec.entries = newEntries
+      rec.day = bestSlot.day
+      rec.startPeriod = bestSlot.period
+      for (const e of newEntries) {
+        placementMap.set(cellKey(e.day, e.period, e.classId), rec)
+      }
+      if (bestSlot !== original) improved = true
+    }
+
+    // 交換: 空きスロットへの移動では改善できない密な盤面向けに、
+    // ランダムなタスクペアのスロット交換を試す
+    const swapAttempts = Math.min(records.length * 2, 400)
+    for (let i = 0; i < swapAttempts; i++) {
+      if (Date.now() > deadline) return bestScore
+      const recA = records[Math.floor(Math.random() * records.length)]
+      const recB = records[Math.floor(Math.random() * records.length)]
+      if (recA === recB) continue
+      const swapped = trySwapRecords(recA, recB, state, placementMap, evalScore, bestScore)
+      if (swapped !== null) {
+        bestScore = swapped
+        improved = true
+      }
+    }
+
+    if (!improved) break
+  }
+
+  return bestScore
+}
+
+// ============================================================
 // ロック済みエントリの事前配置（部分再生成用）
 // ============================================================
 
@@ -2519,6 +2729,10 @@ export function* generateSchedule(
     unplacedTasks: [],
   }
 
+  // ベスト解のボード状態スナップショット（磨き込みフェーズ用）
+  let bestSnapshot: ReturnType<typeof saveState> | null = null
+  let bestUnplacedCount = 0
+
   // 前パスで未配置だったタスクを追跡（優先リスタート用）
   let previousUnplacedTasks: ScheduleTask[] = []
 
@@ -2756,7 +2970,7 @@ export function* generateSchedule(
 
     // スコア計算
     const score = calculateScore(
-      state.entries, finalUnplaced, totalTasks,
+      state.entries, finalUnplaced.length, totalTasks,
       subjectMap, assignmentMap, teacherMap, maxTeacherPerDay,
     )
 
@@ -2778,6 +2992,9 @@ export function* generateSchedule(
           return diagnosed.map((ut) => ({ ...ut, suggestions: sug.length > 0 ? sug : undefined }))
         }),
       }
+      // 磨き込みフェーズ用にボード状態を保存
+      bestSnapshot = saveState(state, placementMap)
+      bestUnplacedCount = finalUnplaced.length
     }
 
     // 進捗を定期的に yield（5パスごと or 最終パス）
@@ -2788,6 +3005,34 @@ export function* generateSchedule(
         bestScore: bestResult.score,
         iterations: pass + 1,
         restarts: pass,
+      }
+    }
+  }
+
+  // フェーズ4: ソフト制約の磨き込み（局所探索）
+  // ベスト解のハード制約を維持したまま、タスクの移動・交換でソフトスコアを改善する。
+  // 完全解の場合は最低限の時間を確保し、未完成解は残り時間内でのみ実行する。
+  if (bestSnapshot && bestResult.entries.length > 0) {
+    const remaining = MAX_SCHEDULER_MS - (Date.now() - schedulerStartTime)
+    const budget = Math.min(
+      POLISH_MAX_MS,
+      Math.max(remaining, bestResult.isComplete ? POLISH_MIN_COMPLETE_MS : 0),
+    )
+    if (budget >= 50) {
+      const polishState = createEmptyState()
+      const polishPlacementMap = new Map<string, PlacementRecord>()
+      loadState(polishState, polishPlacementMap, bestSnapshot)
+      const polishedScore = polishSoftConstraints(
+        polishState, polishPlacementMap, bestUnplacedCount, totalTasks,
+        subjectMap, assignmentMap, teacherMap, maxTeacherPerDay,
+        Date.now() + budget,
+      )
+      if (polishedScore > bestResult.score) {
+        bestResult = {
+          ...bestResult,
+          entries: [...polishState.entries],
+          score: polishedScore,
+        }
       }
     }
   }

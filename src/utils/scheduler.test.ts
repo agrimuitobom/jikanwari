@@ -1097,4 +1097,118 @@ describe('scheduler', () => {
       expect(result.unplacedTasks.some((u) => u.assignmentId === a2.id)).toBe(true)
     })
   })
+
+  describe('穴あき防止とソフト制約磨き込み', () => {
+    it('クラスの授業が1限から詰めて配置される（穴あきなし）', () => {
+      const t = makeTeacher()
+      const subjects = [1, 2, 3].map((i) =>
+        makeSubject({ name: `科目${i}`, weeklyFrequency: 1 }),
+      )
+      const assignments = subjects.map((s) =>
+        makeAssignment({ subjectId: s.id, teacherIds: [t.id], weeklyCount: 1 }),
+      )
+
+      const result = runGenerator([t], subjects, assignments)
+      expect(result.isComplete).toBe(true)
+
+      // 各曜日で、配置された時限が1限からの連番になっている（途中に空きコマがない）
+      const byDay = new Map<string, number[]>()
+      for (const e of result.entries) {
+        const list = byDay.get(e.day) ?? []
+        list.push(e.period)
+        byDay.set(e.day, list)
+      }
+      for (const periods of byDay.values()) {
+        const sorted = [...periods].sort((a, b) => a - b)
+        expect(sorted).toEqual(sorted.map((_, i) => i + 1))
+      }
+    })
+
+    it('固定スロットは磨き込み後も維持される', () => {
+      const t = makeTeacher()
+      const hrSubject = makeSubject({ name: 'HR', weeklyFrequency: 1 })
+      const hrAssignment = makeAssignment({
+        subjectId: hrSubject.id,
+        teacherIds: [t.id],
+        weeklyCount: 1,
+        fixedSlots: [{ day: 'thursday', period: 6 }],
+      })
+      const s2 = makeSubject({ name: '数学', weeklyFrequency: 2 })
+      const a2 = makeAssignment({
+        subjectId: s2.id,
+        teacherIds: [t.id],
+        weeklyCount: 2,
+      })
+
+      const result = runGenerator([t], [hrSubject, s2], [hrAssignment, a2])
+      expect(result.isComplete).toBe(true)
+
+      const hrEntries = result.entries.filter((e) => e.assignmentId === hrAssignment.id)
+      expect(hrEntries).toHaveLength(1)
+      expect(hrEntries[0].day).toBe('thursday')
+      expect(hrEntries[0].period).toBe(6)
+    })
+
+    it('磨き込み後もハード制約が維持される（教員・クラス・施設の重複なし）', () => {
+      const room = makeRoom({ name: '実習室' })
+      const tA = makeTeacher({ name: '教員A' })
+      const tB = makeTeacher({ name: '教員B' })
+      const tC = makeTeacher({ name: '教員C' })
+      const s1 = makeSubject({ name: '数学', weeklyFrequency: 3 })
+      const s2 = makeSubject({ name: '英語', weeklyFrequency: 3 })
+      const s3 = makeSubject({ name: '実習A', weeklyFrequency: 2, consecutivePairs: 1 })
+      const s4 = makeSubject({ name: '実習B', weeklyFrequency: 2, consecutivePairs: 1 })
+
+      const assignments = [
+        makeAssignment({ classId: 'grade1-class1', subjectId: s1.id, teacherIds: [tA.id], weeklyCount: 3 }),
+        makeAssignment({ classId: 'grade1-class2', subjectId: s1.id, teacherIds: [tA.id], weeklyCount: 3 }),
+        makeAssignment({ classId: 'grade1-class1', subjectId: s2.id, teacherIds: [tB.id], weeklyCount: 3 }),
+        makeAssignment({ classId: 'grade1-class2', subjectId: s2.id, teacherIds: [tB.id], weeklyCount: 3 }),
+        makeAssignment({ classId: 'grade1-class1', subjectId: s3.id, teacherIds: [tC.id], weeklyCount: 2, roomId: room.id }),
+        makeAssignment({ classId: 'grade1-class2', subjectId: s4.id, teacherIds: [tC.id], weeklyCount: 2, roomId: room.id }),
+      ]
+      const assignmentMap = new Map(assignments.map((a) => [a.id, a]))
+
+      const result = runGenerator(
+        [tA, tB, tC], [s1, s2, s3, s4], assignments, undefined, [room],
+      )
+      expect(result.isComplete).toBe(true)
+
+      // weeklyCountちょうどの配置数
+      for (const a of assignments) {
+        expect(result.entries.filter((e) => e.assignmentId === a.id)).toHaveLength(a.weeklyCount)
+      }
+
+      // クラス・教員・施設の重複なし
+      const classSlots = new Set<string>()
+      const teacherSlots = new Set<string>()
+      const roomSlots = new Set<string>()
+      for (const e of result.entries) {
+        const classKey = `${e.day}:${e.period}:${e.classId}`
+        expect(classSlots.has(classKey)).toBe(false)
+        classSlots.add(classKey)
+
+        const a = assignmentMap.get(e.assignmentId)!
+        for (const tid of a.teacherIds) {
+          const teacherKey = `${e.day}:${e.period}:${tid}`
+          expect(teacherSlots.has(teacherKey)).toBe(false)
+          teacherSlots.add(teacherKey)
+        }
+        if (a.roomId) {
+          const roomKey = `${e.day}:${e.period}:${a.roomId}`
+          expect(roomSlots.has(roomKey)).toBe(false)
+          roomSlots.add(roomKey)
+        }
+      }
+
+      // 連続ペアの整合性: 実習は同日の連続2コマ
+      for (const a of assignments.slice(4)) {
+        const es = result.entries
+          .filter((e) => e.assignmentId === a.id)
+          .sort((x, y) => x.period - y.period)
+        expect(es[0].day).toBe(es[1].day)
+        expect(es[1].period - es[0].period).toBe(1)
+      }
+    })
+  })
 })
